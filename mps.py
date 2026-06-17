@@ -96,6 +96,7 @@ class MPS(nn.Module):
             dtype: torch.dtype = torch.float32,
             init_std: Optional[float] = None,
             *,
+            restrict_bond_to_pow2: bool = False,
             _skip_init: bool = False,
     ) -> None:
         """Build a fresh MPS.
@@ -104,6 +105,16 @@ class MPS(nn.Module):
         value per site. ``init_std`` controls the spread of the random Gaussian
         initialisation; left as ``None`` it defaults to ``1/sqrt(bond_dim)``,
         which keeps the initial amplitudes from blowing up with chain length.
+
+        ``restrict_bond_to_pow2`` constrains every truncation to keep a number
+        of singular values that is a power of two, so each bond dimension stays
+        in ``{1, 2, 4, 8, ...}``. This is for deployment on a quantum computer,
+        where a bond of dimension ``D`` costs ``ceil(log2 D)`` qubits: forcing
+        ``D`` to a power of two means the bond register is used exactly, with no
+        padding. It truncates *down* (keeps the top ``2^k`` singular values for
+        the largest ``2^k`` not exceeding the rank the cutoff / ``max_bond_dim``
+        would otherwise allow), so it is lossy by construction; the discarded
+        weight is logged like any other truncation.
 
         ``_skip_init`` is for internal use by :meth:`load`: it allocates the
         parameter list with zeros so the saved tensors can be copied straight
@@ -123,6 +134,7 @@ class MPS(nn.Module):
         self.num_sites = num_sites
         self.bond_dim = bond_dim
         self.dtype = dtype
+        self.restrict_bond_to_pow2 = bool(restrict_bond_to_pow2)
 
         self.physical_dims: List[int] = self._normalise_physical_dims(physical_dims)
 
@@ -364,6 +376,7 @@ class MPS(nn.Module):
                     "bond_dim": self.bond_dim,
                     "physical_dims": list(self.physical_dims),
                     "dtype": _REVERSE_DTYPE_MAP[self.dtype],
+                    "restrict_bond_to_pow2": self.restrict_bond_to_pow2,
                 },
                 "tensors": [site_tensor.detach().cpu().clone() for site_tensor in self.site_tensors],
             },
@@ -396,6 +409,7 @@ class MPS(nn.Module):
             bond_dim=config["bond_dim"],
             physical_dims=config["physical_dims"],
             dtype=dtype,
+            restrict_bond_to_pow2=config.get("restrict_bond_to_pow2", False),
             _skip_init=True,
         )
 
@@ -593,6 +607,17 @@ class MPS(nn.Module):
     # Canonicalization and tensor manipulation
     # ----------------------------------------------------------------------
 
+    @staticmethod
+    def _floor_pow2(n: int) -> int:
+        """Largest power of two not exceeding ``n`` (``n >= 1``).
+
+        ``1->1, 2->2, 3->2, 16->16, 17->16, 41->32``. Used to keep bond
+        dimensions on the ``2^k`` grid when ``restrict_bond_to_pow2`` is set.
+        """
+        if n < 1:
+            return 1
+        return 1 << (n.bit_length() - 1)
+
     def _truncation_rank(
         self,
         singular_values: torch.Tensor,
@@ -604,6 +629,10 @@ class MPS(nn.Module):
         Two independent caps, whichever bites first: a relative ``cutoff`` (drop
         anything below ``cutoff * sigma_max``) and a hard ``max_bond_dim``. At
         least one value is always kept so a bond never collapses to zero.
+
+        When ``restrict_bond_to_pow2`` is set on the model, the surviving rank is
+        finally floored to the largest power of two not exceeding it, so the bond
+        lands on the ``2^k`` grid (a clean ``k`` qubits on a quantum computer).
         """
         rank_to_keep = len(singular_values)
         if cutoff > 0:
@@ -611,6 +640,8 @@ class MPS(nn.Module):
             rank_to_keep = max(int((singular_values / singular_values_max >= cutoff).sum().item()), 1)
         if max_bond_dim is not None:
             rank_to_keep = min(rank_to_keep, max_bond_dim)
+        if self.restrict_bond_to_pow2:
+            rank_to_keep = self._floor_pow2(rank_to_keep)
         return rank_to_keep
     
     def _log_discarded_weight(

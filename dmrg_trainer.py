@@ -693,6 +693,8 @@ class DMRGTrainer:
                             )
                             bond_cap = new_cap
                             binding_streak = 0
+                            wait = 0
+                            loops_since_best = 0
                 else:
                     binding_streak = 0
 

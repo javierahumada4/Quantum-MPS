@@ -49,8 +49,8 @@ CONFIG = DMRGConfig(
 
     # mps capacity
     max_bond_dim=64,
-    init_bond_cap=8,
-    bond_growth_factor=1.5,
+    init_bond_cap=4,
+    bond_growth_factor=2.0,
     discarded_weight_threshold=1e-3,
     grow_confirm_loops=5,
     svd_cutoff=1e-8,
@@ -188,7 +188,8 @@ def main(data_dir: Path) -> None:
         bond_dim=INIT_BOND_DIM,
         physical_dims=physical_dims,
         dtype=DTYPE,
-        init_std=None
+        init_std=None,
+        restrict_bond_to_pow2=True,
     )
     logger.info(
         "MPS: %d sites, initial bond %d, max(d)=%d, initial parameters %d",

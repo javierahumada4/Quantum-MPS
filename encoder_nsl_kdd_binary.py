@@ -34,7 +34,7 @@ Run as a script it mirrors ``encoder_nsl_kdd.main`` but writes its artefacts to
 a *separate* output directory, leaving the full-resolution encoding intact so
 the two can be compared side by side:
 
-    python encoder_nsl_kdd_binary.py ./nsl_kdd
+    python encoder_nsl_kdd_binary.py ./nsl_kdd ./nsl_kdd_binary
 """
 
 from __future__ import annotations
