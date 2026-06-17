@@ -1,0 +1,3 @@
+threshold_name,threshold,realised_fpr_on_test_normal
+p94.5,10.799077,0.119864
+p99,15.497418,0.025744

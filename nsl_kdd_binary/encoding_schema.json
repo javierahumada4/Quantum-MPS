@@ -1,0 +1,367 @@
+{
+  "n_features": 37,
+  "physical_dims": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+  ],
+  "features": [
+    {
+      "site": 0,
+      "name": "duration",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    },
+    {
+      "site": 1,
+      "name": "src_bytes",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        233.0,
+        null
+      ]
+    },
+    {
+      "site": 2,
+      "name": "dst_bytes",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        379.0,
+        null
+      ]
+    },
+    {
+      "site": 3,
+      "name": "land",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 4,
+      "name": "wrong_fragment",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 5,
+      "name": "urgent",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 6,
+      "name": "hot",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 7,
+      "name": "num_failed_logins",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 8,
+      "name": "logged_in",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 1.0
+    },
+    {
+      "site": 9,
+      "name": "num_compromised",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 10,
+      "name": "root_shell",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 11,
+      "name": "su_attempted",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 12,
+      "name": "num_root",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 13,
+      "name": "num_file_creations",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 14,
+      "name": "num_shells",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 15,
+      "name": "num_access_files",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 16,
+      "name": "is_host_login",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 17,
+      "name": "is_guest_login",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 18,
+      "name": "count",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        4.0,
+        null
+      ]
+    },
+    {
+      "site": 19,
+      "name": "srv_count",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        5.0,
+        null
+      ]
+    },
+    {
+      "site": 20,
+      "name": "serror_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 21,
+      "name": "srv_serror_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 22,
+      "name": "rerror_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0
+    },
+    {
+      "site": 23,
+      "name": "srv_rerror_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    },
+    {
+      "site": 24,
+      "name": "same_srv_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 1.0
+    },
+    {
+      "site": 25,
+      "name": "diff_srv_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    },
+    {
+      "site": 26,
+      "name": "srv_diff_host_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    },
+    {
+      "site": 27,
+      "name": "dst_host_count",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        156.0,
+        null
+      ]
+    },
+    {
+      "site": 28,
+      "name": "dst_host_srv_count",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 255.0
+    },
+    {
+      "site": 29,
+      "name": "dst_host_same_srv_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 1.0
+    },
+    {
+      "site": 30,
+      "name": "dst_host_diff_srv_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    },
+    {
+      "site": 31,
+      "name": "dst_host_same_src_port_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.01,
+        null
+      ]
+    },
+    {
+      "site": 32,
+      "name": "dst_host_srv_diff_host_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    },
+    {
+      "site": 33,
+      "name": "dst_host_serror_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    },
+    {
+      "site": 34,
+      "name": "dst_host_srv_serror_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    },
+    {
+      "site": 35,
+      "name": "dst_host_rerror_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    },
+    {
+      "site": 36,
+      "name": "dst_host_srv_rerror_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ]
+    }
+  ]
+}
