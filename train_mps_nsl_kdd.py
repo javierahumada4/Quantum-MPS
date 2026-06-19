@@ -8,8 +8,8 @@ Usage:
     python train_mps_nsl_kdd.py /path/to/nsl_kdd
 
 Expects to find the encoder artifacts in that directory:
-    train_X.pt, train_meta.pt, encoding_schema.json
-and optionally test_X.pt / test_meta.pt (only for an informational check).
+    train_normal_X.pt, val_normal_X.pt, encoding_schema.json
+(the normal-only train/validation split is produced and saved by the encoder).
 
 Produces in the same directory:
     mps_trained.pt        the trained MPS (MPS.save format)
@@ -40,7 +40,10 @@ logger = logging.getLogger("train_mps")
 
 DTYPE = torch.float64
 INIT_BOND_DIM = 2
-VAL_FRACTION = 0.15
+
+# The train/validation split is produced and saved by the encoder
+# (train_normal_* / val_normal_*); the trainer just loads it. Set the encoder's
+# --val-fraction to 0 to train without a validation set.
 
 CONFIG = DMRGConfig(
     # training
@@ -80,43 +83,22 @@ CONFIG = DMRGConfig(
 
 
 # ----------------------------------------------------------------------
-def load_normal_train(data_dir: Path) -> torch.Tensor:
-    """Loads train_X.pt and keeps only the normal rows."""
-    x_path = data_dir / "train_X.pt"
-    meta_path = data_dir / "train_meta.pt"
-    if not x_path.exists() or not meta_path.exists():
+def load_normal_split(data_dir: Path, split: str) -> torch.Tensor:
+    """Load a normal-only split (``<split>_X.pt``) written by the encoder.
+
+    The encoder is responsible for partitioning the normal KDDTrain+ rows into
+    ``train_normal`` and ``val_normal``; the trainer just consumes them so the
+    split never drifts between modules. Returns a 2D long tensor.
+    """
+    x_path = data_dir / f"{split}_X.pt"
+    if not x_path.exists():
         raise FileNotFoundError(
-            f"Missing {x_path.name} or {meta_path.name}. "
-            "Run encoder_nsl_kdd.py first."
+            f"Missing {x_path.name}. Run encoder_nsl_kdd_full_binary.py first "
+            "(it now writes the normal train/val split)."
         )
-    x_all = torch.load(x_path, weights_only=True)
-    meta = torch.load(meta_path, weights_only=True)
-    is_attack = meta["is_attack"]
-
-    normal_mask = is_attack == 0
-    x_normal = x_all[normal_mask].long()
-    logger.info(
-        "train_X: %d total rows, %d normal (%.1f%%) -> training with those",
-        len(x_all), len(x_normal), 100.0 * len(x_normal) / len(x_all),
-    )
-    return x_normal
-
-
-def split_train_val(
-    x: torch.Tensor, val_fraction: float, seed: int
-) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-    """Reproducible random normal partition -> (train, val)."""
-    if not (0.0 <= val_fraction < 1.0):
-        raise ValueError("val_fraction must be in [0, 1)")
-    if val_fraction == 0.0:
-        return x, None
-
-    generator = torch.Generator().manual_seed(seed)
-    permutation = torch.randperm(len(x), generator=generator)
-    n_val = max(1, int(round(val_fraction * len(x))))
-    val_idx = permutation[:n_val]
-    train_idx = permutation[n_val:]
-    return x[train_idx].contiguous(), x[val_idx].contiguous()
+    x = torch.load(x_path, weights_only=True).long()
+    logger.info("%s: %d normal rows", split, len(x))
+    return x
 
 
 def load_physical_dims(data_dir: Path) -> list[int]:
@@ -156,11 +138,12 @@ def check_columns_within_dims(x: torch.Tensor, physical_dims: list[int]) -> None
 def main(data_dir: Path) -> None:
     """Train the MPS on normal traffic and save the model + history.
 
-    Loads the physical dimensions and the normal-only training rows produced by
-    the encoder, splits off a normal validation set (used both for early stopping
-    and, later, for threshold calibration), builds a small MPS and runs DMRG with
-    the module-level :data:`CONFIG`. Writes ``mps_trained.pt`` and the training
-    history/log into ``data_dir``.
+    Loads the physical dimensions and the normal-only train/validation split
+    produced by the encoder (``train_normal_*`` / ``val_normal_*``), builds a
+    small MPS and runs DMRG with the module-level :data:`CONFIG`. The validation
+    set is used for early stopping (and, later, for threshold calibration in the
+    evaluator). Writes ``mps_trained.pt`` and the training history/log into
+    ``data_dir``.
     """
     seed = CONFIG.seed if CONFIG.seed is not None else 0
     torch.manual_seed(seed)
@@ -173,12 +156,17 @@ def main(data_dir: Path) -> None:
 
     # --- data --------------------------------------------------------
     physical_dims = load_physical_dims(data_dir)
-    x_normal = load_normal_train(data_dir)
-    check_columns_within_dims(x_normal, physical_dims)
+    train_data = load_normal_split(data_dir, "train_normal")
+    check_columns_within_dims(train_data, physical_dims)
 
-    train_data, val_data = split_train_val(x_normal, VAL_FRACTION, seed)
+    val_data: Optional[torch.Tensor] = load_normal_split(data_dir, "val_normal")
+    if val_data is not None and len(val_data) == 0:
+        val_data = None
+    if val_data is not None:
+        check_columns_within_dims(val_data, physical_dims)
+
     n_val = 0 if val_data is None else len(val_data)
-    logger.info("partition: %d training, %d validation (both normal-only)",
+    logger.info("partition: %d training, %d validation (both normal-only, from encoder)",
                 len(train_data), n_val)
 
     # --- model -------------------------------------------------------

@@ -12,10 +12,11 @@ Threshold policy
 ----------------
 A detector needs a cut-off, and the cut-off must NEVER be chosen using
 attack data (there are no attacks at training time). It is fixed as a
-percentile of the NLL over held-out NORMAL traffic. We reuse the *exact*
-val-normal split the trainer held out, by importing the trainer's own
-split helpers -- so the threshold is calibrated on data the model never
-saw, and the split cannot silently drift from the trainer's.
+percentile of the NLL over held-out NORMAL traffic. We load the *exact*
+val-normal split saved by the encoder (``val_normal_*``) -- the same one
+the trainer used for early stopping -- so the threshold is calibrated on
+data the model never saw, and the split cannot silently drift between the
+encoder, the trainer and this evaluator.
 
 Usage:
     python evaluate_mps_nsl_kdd.py /path/to/nsl_kdd
@@ -65,13 +66,6 @@ from sklearn.metrics import (
 
 from mps import MPS
 
-from train_mps_nsl_kdd import (
-    CONFIG,
-    VAL_FRACTION,
-    load_normal_train,
-    split_train_val,
-)
-
 
 logger = logging.getLogger("evaluate_mps")
 
@@ -111,38 +105,51 @@ def load_model(data_dir: Path) -> MPS:
     return mps
 
 
-def load_test(data_dir: Path) -> Tuple[torch.Tensor, Dict]:
-    """Load the encoded test split and its metadata."""
-    x_path = data_dir / "test_X.pt"
-    meta_path = data_dir / "test_meta.pt"
+def load_evaluation(data_dir: Path) -> Tuple[torch.Tensor, Dict]:
+    """Load the encoder's held-out evaluation split and its metadata."""
+    x_path = data_dir / "evaluation_X.pt"
+    meta_path = data_dir / "evaluation_meta.pt"
     if not x_path.exists() or not meta_path.exists():
         raise EvaluationError(
             f"Missing {x_path.name} or {meta_path.name}. "
-            "Run encoder_nsl_kdd.py first."
+            "Run encoder_nsl_kdd_full_binary.py first "
+            "(it writes the held-out evaluation split)."
         )
     x = torch.load(x_path, weights_only=True).long()
     meta = torch.load(meta_path, weights_only=True)
     return x, meta
 
 
-def reserve_splits(data_dir: Path) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Reconstruct the trainer's (train-normal, val-normal) partition.
-    """
-    if VAL_FRACTION <= 0.0:
+def _load_normal_split(data_dir: Path, split: str) -> torch.Tensor:
+    """Load a normal-only split tensor (``<split>_X.pt``) written by the encoder."""
+    x_path = data_dir / f"{split}_X.pt"
+    if not x_path.exists():
         raise EvaluationError(
-            "VAL_FRACTION is 0 in the trainer config: no val-normal was "
-            "held out, so no attack-free threshold can be calibrated. Set "
-            "VAL_FRACTION > 0 and retrain before evaluating."
+            f"Missing {x_path.name}. Run encoder_nsl_kdd_full_binary.py first "
+            "(it writes the normal train/val split)."
         )
-    x_normal = load_normal_train(data_dir)
-    seed = CONFIG.seed if CONFIG.seed is not None else 0
-    train_normal, val_normal = split_train_val(x_normal, VAL_FRACTION, seed)
-    if val_normal is None:
-        raise EvaluationError("split_train_val returned no validation set.")
+    return torch.load(x_path, weights_only=True).long()
+
+
+def reserve_splits(data_dir: Path) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Load the encoder's (train-normal, val-normal) partition from disk.
+
+    The split is produced once by the encoder and saved as ``train_normal_*`` /
+    ``val_normal_*``; the threshold is then calibrated on ``val_normal``, data
+    the model never saw. Loading the files (instead of reconstructing the split
+    here) makes it impossible for the calibration split to drift from training.
+    """
+    train_normal = _load_normal_split(data_dir, "train_normal")
+    val_normal = _load_normal_split(data_dir, "val_normal")
+    if len(val_normal) == 0:
+        raise EvaluationError(
+            "val_normal is empty: the encoder was run with --val-fraction 0, so "
+            "no attack-free threshold can be calibrated. Re-run the encoder with "
+            "--val-fraction > 0 and retrain before evaluating."
+        )
     logger.info(
-        "reserved trainer split: %d train-normal, %d val-normal "
-        "(seed=%d, val_fraction=%.2f)",
-        len(train_normal), len(val_normal), seed, VAL_FRACTION,
+        "loaded encoder split: %d train-normal, %d val-normal",
+        len(train_normal), len(val_normal),
     )
     return train_normal, val_normal
 
@@ -725,11 +732,11 @@ def main(data_dir: Path) -> None:
     sanity = model_sanity_checks(mps)
 
     # --- data -------------------------------------------------------
-    test_x, test_meta = load_test(data_dir)
+    test_x, test_meta = load_evaluation(data_dir)
     train_normal, val_normal = reserve_splits(data_dir)
 
     # --- scoring ----------------------------------------------------
-    test_scores_raw = compute_scores(mps, test_x, where="test")
+    test_scores_raw = compute_scores(mps, test_x, where="evaluation")
     val_scores = compute_scores(mps, val_normal, where="val-normal")
     train_scores = compute_scores(mps, train_normal, where="train-normal")
 
@@ -740,7 +747,7 @@ def main(data_dir: Path) -> None:
 
     if not (len(test_scores_raw) == len(is_attack) == len(family_code)):
         raise EvaluationError(
-            "test_X and test_meta disagree on the number of rows."
+            "evaluation_X and evaluation_meta disagree on the number of rows."
         )
 
     # Drop NaN scores consistently across scores and every label array.
@@ -830,8 +837,8 @@ def main(data_dir: Path) -> None:
         },
         "thresholds": thresholds,
         "threshold_policy": (
-            "percentile of val-normal NLL; val-normal is the trainer's "
-            "held-out split, reconstructed via its own split helpers"
+            "percentile of val-normal NLL; val-normal is the encoder's "
+            "held-out split (val_normal_*), shared with the trainer"
         ),
         "global_metrics": global_auc,
         "metrics_per_threshold": per_threshold,

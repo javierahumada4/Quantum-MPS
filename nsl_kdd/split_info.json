@@ -1,0 +1,37 @@
+{
+  "evaluation_split": {
+    "source": "KDDTest+",
+    "partitioned": false,
+    "n_evaluation": 22544,
+    "evaluation_by_family": {
+      "dos": 7458,
+      "normal": 9711,
+      "probe": 2421,
+      "r2l": 2754,
+      "u2r": 200
+    }
+  },
+  "fs_split": {
+    "source": "KDDTrain+ (with attacks)",
+    "fs_fraction": 0.2,
+    "fs_seed": 0,
+    "stratified_by": "family_code",
+    "n_fs": 25194,
+    "n_model_pool": 100779,
+    "fs_by_family": {
+      "dos": 9185,
+      "normal": 13469,
+      "probe": 2331,
+      "r2l": 199,
+      "u2r": 10
+    }
+  },
+  "normal_split": {
+    "source": "KDDTrain+ model pool (normal rows only)",
+    "val_fraction": 0.15,
+    "val_seed": 123,
+    "n_model_pool_normal": 53874,
+    "n_train_normal": 45793,
+    "n_val_normal": 8081
+  }
+}

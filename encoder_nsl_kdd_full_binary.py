@@ -27,22 +27,32 @@ The chain is 40 sites (41 NSL-KDD features minus the zero-variance
 The fitted state is one :class:`FeatureSpec` per site; ``physical_dims`` is just
 their ``d`` values (all 2s) and is what the MPS constructor needs. Run as a script it reads ``KDDTrain+.txt`` / ``KDDTest+.txt`` from
 ``./nsl_kdd`` by default and writes the encoded tensors, per-split metadata and
-``encoding_schema.json`` back into that same folder:
+``encoding_schema.json`` back into that same folder. KDDTrain+ is partitioned once to create a labelled feature-selection set
+(``fs_*``) and a disjoint normal-only model pool; KDDTest+ is never partitioned
+and is written whole as the final evaluation split:
+
+    train_X.pt / train_meta.pt            (KDDTrain+, all rows; reference/baseline)
+    fs_X.pt / fs_meta.pt                  (KDDTrain+ slice WITH attacks; feature selection)
+    train_normal_X.pt / train_normal_meta.pt  (model-pool normal rows; MPS is fit on these)
+    val_normal_X.pt / val_normal_meta.pt      (held-out model-pool normal: early stopping + threshold)
+    evaluation_X.pt / evaluation_meta.pt  (full KDDTest+, final number, once)
+    encoding_schema.json, split_info.json
 
     python encoder_nsl_kdd_full_binary.py
-    python encoder_nsl_kdd_full_binary.py ./nsl_kdd frequency
-    python encoder_nsl_kdd_full_binary.py ./nsl_kdd unknown
+    python encoder_nsl_kdd_full_binary.py ./nsl_kdd --strategy frequency
+    python encoder_nsl_kdd_full_binary.py ./nsl_kdd --fs-fraction 0.2 --fs-seed 0
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -368,11 +378,136 @@ def build_meta(df: pd.DataFrame) -> Dict[str, torch.Tensor]:
 
 
 # ----------------------------------------------------------------------
+# Generic stratified row split
+# ----------------------------------------------------------------------
+
+def stratified_split(
+    family_code: torch.Tensor,
+    frac_select: float,
+    seed: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Split row indices into two disjoint halves, stratified by family.
+
+    Every family is split with the same ``frac_select`` so that both outputs
+    carry similar family proportions. Singleton families are kept in the first
+    output. Within each output the indices are shuffled. Reproducible given
+    ``seed``.
+    """
+    if not 0.0 < frac_select < 1.0:
+        raise ValueError(f"frac_select must be in (0, 1), got {frac_select}")
+    codes = family_code.detach().cpu().numpy()
+    rng = np.random.default_rng(seed)
+
+    select_idx: List[int] = []
+    eval_idx: List[int] = []
+    for code in np.unique(codes):
+        group = np.where(codes == code)[0]
+        rng.shuffle(group)
+        if len(group) < 2:
+            select_idx.extend(group.tolist())
+            continue
+        n_select = int(round(len(group) * frac_select))
+        n_select = min(max(1, n_select), len(group) - 1)
+        select_idx.extend(group[:n_select].tolist())
+        eval_idx.extend(group[n_select:].tolist())
+
+    select_arr = np.asarray(select_idx, dtype=np.int64)
+    eval_arr = np.asarray(eval_idx, dtype=np.int64)
+    rng.shuffle(select_arr)
+    rng.shuffle(eval_arr)
+    return select_arr, eval_arr
+
+
+def slice_meta(meta: Dict, idx: np.ndarray) -> Dict:
+    """Row-slice a meta dict by ``idx``, leaving non-row entries untouched.
+
+    Tensors and python lists of per-row values are indexed; ``family_names``
+    (a vocabulary, not per-row) is copied through unchanged.
+    """
+    index = torch.as_tensor(idx, dtype=torch.long)
+    out: Dict = {}
+    for key, value in meta.items():
+        if key == "family_names":
+            out[key] = list(value)
+        elif torch.is_tensor(value):
+            out[key] = value.index_select(0, index)
+        elif isinstance(value, (list, tuple)):
+            out[key] = [value[i] for i in idx.tolist()]
+        else:
+            out[key] = value
+    return out
+
+
+def _family_counts(meta: Dict) -> Dict[str, int]:
+    """Per-family row counts for a meta dict, keyed by family name."""
+    names = list(meta["family_names"])
+    codes = meta["family_code"].detach().cpu().numpy()
+    return {names[c]: int((codes == c).sum()) for c in np.unique(codes)}
+
+
+# ----------------------------------------------------------------------
+# Normal-only train / validation split
+# ----------------------------------------------------------------------
+
+def split_normal_positions(
+    normal_positions: np.ndarray,
+    val_fraction: float,
+    seed: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Split *absolute* normal row indices into (train, validation).
+
+    ``normal_positions`` holds the row indices (into the full KDDTrain+ split)
+    that are normal traffic. They are shuffled reproducibly and the first
+    ``val_fraction`` go to validation, the rest to training. Returns the two
+    arrays of absolute indices, so the caller can slice both ``X`` and the meta
+    dict with them.
+
+    The shuffling uses a ``torch.Generator`` exactly like the trainer used to,
+    so a given ``(val_fraction, seed)`` reproduces the partition the trainer
+    would have built internally before this logic moved here.
+    """
+    if not (0.0 <= val_fraction < 1.0):
+        raise ValueError(f"val_fraction must be in [0, 1), got {val_fraction}")
+    n = int(len(normal_positions))
+    if val_fraction == 0.0 or n == 0:
+        return normal_positions, np.empty(0, dtype=normal_positions.dtype)
+
+    generator = torch.Generator().manual_seed(int(seed))
+    permutation = torch.randperm(n, generator=generator).numpy()
+    n_val = max(1, int(round(val_fraction * n)))
+    n_val = min(n_val, n - 1) if n > 1 else 0
+    val_local = permutation[:n_val]
+    train_local = permutation[n_val:]
+    return normal_positions[train_local], normal_positions[val_local]
+
+
+# ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
 
-def main(data_dir: Path, strategy: str) -> None:
-    """Fit on the train split with ``strategy`` and write the artefacts to ``data_dir``."""
+def main(
+    data_dir: Path,
+    strategy: str,
+    val_fraction: float = 0.15,
+    val_seed: int = 123,
+    fs_fraction: float = 0.2,
+    fs_seed: int = 0,
+) -> None:
+    """Fit on the train split with ``strategy`` and write the artefacts to ``data_dir``.
+
+    KDDTest+ is never partitioned. It is encoded once and written whole as
+    ``evaluation_X.pt`` / ``evaluation_meta.pt`` for the final write-once
+    measurement; it is not used for feature selection or k-choice.
+
+    KDDTrain+ is itself split (stratified by family, reproducible given
+    ``fs_seed``) into a *feature-selection* set ``fs_*`` -- which keeps its
+    attacks, since feature ranking needs both classes -- and a disjoint *model
+    pool*. The model pool's attacks are dropped and its normal rows are
+    partitioned into ``train_normal_*`` / ``val_normal_*`` (reproducible given
+    ``val_seed``). Because the split happens before the train/validation split,
+    the feature-selection set never overlaps the rows the MPS is trained or
+    calibrated on. ``val_fraction == 0`` writes an empty validation set.
+    """
     out_dir = data_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -417,13 +552,105 @@ def main(data_dir: Path, strategy: str) -> None:
                 len(encoder.specs), len(encoder.specs))
     logger.info("  by kind: %s", dict(Counter(s.kind for s in encoder.specs)))
 
+    # --- keep the labelled KDDTest+ split intact for final evaluation -------
+    # Feature selection and k-choice must come from fs_* (a KDDTrain+ slice),
+    # never from KDDTest+. The whole test split is therefore saved only as the
+    # final evaluation set.
+    evaluation_X = test_X
+    evaluation_meta = build_meta(test)
+
+    logger.info(
+        "KDDTest+ (%d rows) -> evaluation %d (no test partitioning)",
+        len(test), len(evaluation_X),
+    )
+    logger.info("  evaluation by family: %s", _family_counts(evaluation_meta))
+
+    # --- partition KDDTrain+ into a feature-selection set and a model pool ---
+    # The feature-selection set keeps its attacks (feature ranking needs both
+    # classes to measure separability). The model pool is what the Born machine
+    # is built from: its attacks are dropped and the remaining normal rows are
+    # split into train / validation. The two sets are disjoint and stratified by
+    # attack family, so the fs set carries a representative mix of families.
+    train_meta = build_meta(train)
+    fs_idx, model_idx = stratified_split(
+        train_meta["family_code"], frac_select=fs_fraction, seed=fs_seed,
+    )
+    fs_X = train_X.index_select(0, torch.as_tensor(fs_idx, dtype=torch.long))
+    fs_meta = slice_meta(train_meta, fs_idx)
+
+    logger.info(
+        "KDDTrain+ (%d rows) -> fs %d / model-pool %d (fs_fraction=%.2f, fs_seed=%d)",
+        len(train), len(fs_idx), len(model_idx), fs_fraction, fs_seed,
+    )
+    logger.info("  fs by family: %s", _family_counts(fs_meta))
+
+    # --- split the model pool's normal rows into train / validation --------
+    # Normal-only: the Born machine is fit on normal traffic and its threshold is
+    # calibrated on held-out normal traffic. Only model-pool rows are eligible,
+    # so the fs set never overlaps train / validation.
+    model_mask = np.zeros(len(train), dtype=bool)
+    model_mask[model_idx] = True
+    model_normal_positions = np.where(normal_mask & model_mask)[0].astype(np.int64)
+    train_normal_pos, val_normal_pos = split_normal_positions(
+        model_normal_positions, val_fraction=val_fraction, seed=val_seed,
+    )
+    train_normal_X = train_X.index_select(0, torch.as_tensor(train_normal_pos, dtype=torch.long))
+    val_normal_X = train_X.index_select(0, torch.as_tensor(val_normal_pos, dtype=torch.long))
+    train_normal_meta = slice_meta(train_meta, train_normal_pos)
+    val_normal_meta = slice_meta(train_meta, val_normal_pos)
+
+    logger.info(
+        "model-pool normal rows (%d) -> train_normal %d / val_normal %d "
+        "(val_fraction=%.2f, val_seed=%d)",
+        len(model_normal_positions), len(train_normal_pos), len(val_normal_pos),
+        val_fraction, val_seed,
+    )
+
+    # --- write artefacts ----------------------------------------------------
     torch.save(train_X, out_dir / "train_X.pt")
-    torch.save(test_X, out_dir / "test_X.pt")
-    torch.save(build_meta(train), out_dir / "train_meta.pt")
-    torch.save(build_meta(test), out_dir / "test_meta.pt")
+    torch.save(train_meta, out_dir / "train_meta.pt")
+    torch.save(fs_X, out_dir / "fs_X.pt")
+    torch.save(fs_meta, out_dir / "fs_meta.pt")
+    torch.save(train_normal_X, out_dir / "train_normal_X.pt")
+    torch.save(train_normal_meta, out_dir / "train_normal_meta.pt")
+    torch.save(val_normal_X, out_dir / "val_normal_X.pt")
+    torch.save(val_normal_meta, out_dir / "val_normal_meta.pt")
+    torch.save(evaluation_X, out_dir / "evaluation_X.pt")
+    torch.save(evaluation_meta, out_dir / "evaluation_meta.pt")
     (out_dir / "encoding_schema.json").write_text(json.dumps(encoder.schema_dict(), indent=2))
 
+    split_info = {
+        "evaluation_split": {
+            "source": "KDDTest+",
+            "partitioned": False,
+            "n_evaluation": int(len(evaluation_X)),
+            "evaluation_by_family": _family_counts(evaluation_meta),
+        },
+        "fs_split": {
+            "source": "KDDTrain+ (with attacks)",
+            "fs_fraction": fs_fraction,
+            "fs_seed": fs_seed,
+            "stratified_by": "family_code",
+            "n_fs": int(len(fs_idx)),
+            "n_model_pool": int(len(model_idx)),
+            "fs_by_family": _family_counts(fs_meta),
+        },
+        "normal_split": {
+            "source": "KDDTrain+ model pool (normal rows only)",
+            "val_fraction": val_fraction,
+            "val_seed": val_seed,
+            "n_model_pool_normal": int(len(model_normal_positions)),
+            "n_train_normal": int(len(train_normal_pos)),
+            "n_val_normal": int(len(val_normal_pos)),
+        },
+    }
+    (out_dir / "split_info.json").write_text(json.dumps(split_info, indent=2))
+
     logger.info("wrote artefacts to %s/ (strategy=%s)", out_dir, strategy)
+    logger.info(
+        "  train_X / fs_X / train_normal_X / val_normal_X / evaluation_X "
+        "(+ metas), encoding_schema.json, split_info.json"
+    )
 
 
 if __name__ == "__main__":
@@ -432,7 +659,28 @@ if __name__ == "__main__":
         format="%(asctime)s  %(levelname)s  %(message)s",
         datefmt="%H:%M:%S",
     )
-    data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("./nsl_kdd")
-    strategy = sys.argv[2] if len(sys.argv) > 2 else "frequency"
-    main(data_dir, strategy)
-
+    parser = argparse.ArgumentParser(
+        description="Full-binary NSL-KDD encoder: fs comes from KDDTrain+, KDDTest+ stays whole as evaluation.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("data_dir", nargs="?", type=Path, default=Path("./nsl_kdd"),
+                        help="directory holding KDDTrain+.txt / KDDTest+.txt; artefacts are written here")
+    parser.add_argument("--strategy", default="frequency", choices=["frequency", "unknown"],
+                        help="categorical encoding strategy")
+    parser.add_argument("--val-fraction", type=float, default=0.15,
+                        help="fraction of the model-pool normal rows held out as validation")
+    parser.add_argument("--val-seed", type=int, default=123,
+                        help="seed for the normal train/validation split")
+    parser.add_argument("--fs-fraction", type=float, default=0.2,
+                        help="fraction of KDDTrain+ carved off (with attacks) as the feature-selection set")
+    parser.add_argument("--fs-seed", type=int, default=0,
+                        help="seed for the KDDTrain+ feature-selection / model-pool split")
+    args = parser.parse_args()
+    main(
+        args.data_dir,
+        args.strategy,
+        val_fraction=args.val_fraction,
+        val_seed=args.val_seed,
+        fs_fraction=args.fs_fraction,
+        fs_seed=args.fs_seed,
+    )

@@ -1,0 +1,165 @@
+{
+  "n_features": 14,
+  "physical_dims": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+  ],
+  "features": [
+    {
+      "site": 0,
+      "name": "duration",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ],
+      "original_site": 0
+    },
+    {
+      "site": 1,
+      "name": "service",
+      "kind": "categorical_binary",
+      "d": 2,
+      "vocab": [
+        "domain_u",
+        "ftp",
+        "ftp_data",
+        "http",
+        "other",
+        "private",
+        "smtp",
+        "telnet"
+      ],
+      "original_site": 2
+    },
+    {
+      "site": 2,
+      "name": "flag",
+      "kind": "categorical_binary",
+      "d": 2,
+      "vocab": [
+        "REJ",
+        "SF"
+      ],
+      "original_site": 3
+    },
+    {
+      "site": 3,
+      "name": "wrong_fragment",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0,
+      "original_site": 7
+    },
+    {
+      "site": 4,
+      "name": "num_compromised",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0,
+      "original_site": 12
+    },
+    {
+      "site": 5,
+      "name": "is_guest_login",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0,
+      "original_site": 20
+    },
+    {
+      "site": 6,
+      "name": "srv_count",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        5.0,
+        null
+      ],
+      "original_site": 22
+    },
+    {
+      "site": 7,
+      "name": "srv_serror_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0,
+      "original_site": 24
+    },
+    {
+      "site": 8,
+      "name": "rerror_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0,
+      "original_site": 25
+    },
+    {
+      "site": 9,
+      "name": "same_srv_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 1.0,
+      "original_site": 27
+    },
+    {
+      "site": 10,
+      "name": "dst_host_srv_count",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 255.0,
+      "original_site": 31
+    },
+    {
+      "site": 11,
+      "name": "dst_host_diff_srv_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ],
+      "original_site": 33
+    },
+    {
+      "site": 12,
+      "name": "dst_host_same_src_port_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.01,
+        null
+      ],
+      "original_site": 34
+    },
+    {
+      "site": 13,
+      "name": "dst_host_rerror_rate",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        0.0,
+        null
+      ],
+      "original_site": 38
+    }
+  ]
+}
