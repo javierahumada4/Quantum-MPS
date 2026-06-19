@@ -25,12 +25,13 @@ The chain is 40 sites (41 NSL-KDD features minus the zero-variance
       normal -> a *rarity* flag that also carries within-normal variance.
 
 The fitted state is one :class:`FeatureSpec` per site; ``physical_dims`` is just
-their ``d`` values (all 2s) and is what the MPS constructor needs. Run as a
-script it reads ``KDDTrain+.txt`` / ``KDDTest+.txt`` and writes the encoded
-tensors, per-split metadata and ``encoding_schema.json``:
+their ``d`` values (all 2s) and is what the MPS constructor needs. Run as a script it reads ``KDDTrain+.txt`` / ``KDDTest+.txt`` from
+``./nsl_kdd`` by default and writes the encoded tensors, per-split metadata and
+``encoding_schema.json`` back into that same folder:
 
-    python encoder_nsl_kdd_full_binary.py ./nsl_kdd ./nsl_kdd_fullbin_freq frequency
-    python encoder_nsl_kdd_full_binary.py ./nsl_kdd ./nsl_kdd_fullbin_unk  unknown
+    python encoder_nsl_kdd_full_binary.py
+    python encoder_nsl_kdd_full_binary.py ./nsl_kdd frequency
+    python encoder_nsl_kdd_full_binary.py ./nsl_kdd unknown
 """
 
 from __future__ import annotations
@@ -370,8 +371,9 @@ def build_meta(df: pd.DataFrame) -> Dict[str, torch.Tensor]:
 # Main
 # ----------------------------------------------------------------------
 
-def main(data_dir: Path, out_dir: Path, strategy: str) -> None:
-    """Fit on the train split with ``strategy`` and write the artefacts to ``out_dir``."""
+def main(data_dir: Path, strategy: str) -> None:
+    """Fit on the train split with ``strategy`` and write the artefacts to ``data_dir``."""
+    out_dir = data_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
     train = load_split(data_dir / "KDDTrain+.txt")
@@ -431,6 +433,6 @@ if __name__ == "__main__":
         datefmt="%H:%M:%S",
     )
     data_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("./nsl_kdd")
-    strategy = sys.argv[3] if len(sys.argv) > 3 else "frequency"
-    out_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else data_dir / f"fullbin_{strategy}"
-    main(data_dir, out_dir, strategy)
+    strategy = sys.argv[2] if len(sys.argv) > 2 else "frequency"
+    main(data_dir, strategy)
+
