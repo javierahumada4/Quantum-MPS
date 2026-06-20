@@ -715,7 +715,7 @@ def run(
     selected_sites = list(selected_row["kept_sites"])
     k_eff = selected_row["n_features"]
     if out_dir is None:
-        out_dir = data_dir / f"k{k_eff}_selection_only"
+        out_dir = f"k_selection_only"
 
     logger.info(
         "chosen k=%d from selection results: select objective=%.4f, select AUC-ROC=%.4f",
