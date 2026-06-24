@@ -1,0 +1,5 @@
+variant,synthesis,reuse,N_sites,b_max,logical_qubits,high_level_depth,abstract_2q,abstract_depth,abstract_seconds,device_2q,device_depth,device_physical_qubits,device_qubits_used,device_seconds,routing_inflation_2q,routing_overhead_2q
+no_reuse_unitary,unitary,False,8,2,10,9,152,560,0.015065032999984851,296,1070,133,10,0.025186442999995506,1.947,144
+no_reuse_isometry,isometry,False,8,2,10,9,118,417,0.04973450199997842,203,710,133,10,0.06391402200000584,1.72,85
+reuse_unitary,unitary,True,8,2,3,23,152,605,0.0077253320000068015,220,971,133,3,0.02417887899997595,1.447,68
+reuse_isometry,isometry,True,8,2,3,23,118,420,0.050965932000053726,201,797,133,3,0.0661091349999765,1.703,83

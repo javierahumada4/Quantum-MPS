@@ -1,0 +1,49 @@
+{
+  "shots": 8000,
+  "marginal_L1_hw_vs_ref": 0.0638749999999999,
+  "marginal_max_abs_hw_vs_ref": 0.02100000000000002,
+  "site_marginals_hw": [
+    0.5011,
+    0.4935,
+    0.4891,
+    0.4998,
+    0.5095,
+    0.4831,
+    0.4431,
+    0.4914
+  ],
+  "site_marginals_ref": [
+    0.5031,
+    0.5071,
+    0.4834,
+    0.5032,
+    0.4956,
+    0.4861,
+    0.442,
+    0.5124
+  ],
+  "topk_k": 10,
+  "topk_overlap": 1.0,
+  "freq_corr_hw_vs_ref": 0.993305197844954,
+  "tvd_hw_vs_mps": 0.04843310772412401,
+  "tvd_ref_vs_mps": 0.04654001045613383,
+  "tvd_hw_vs_ref": 0.06125,
+  "fidelity_hw_vs_mps": 0.9912427133523566,
+  "hellinger_hw_vs_mps": 0.0662440320969856,
+  "mc_noise_scale": 0.08944271909999159,
+  "marginal_L1_hw_vs_mps": 0.03672690061161327,
+  "marginal_max_abs_hw_vs_mps": 0.010412919868672321,
+  "site_marginals_mps": [
+    0.4993,
+    0.4973,
+    0.4832,
+    0.4977,
+    0.4991,
+    0.4844,
+    0.4462,
+    0.4997
+  ],
+  "backend": "Aer ideal (referencia)",
+  "variant": "reuse_unitary",
+  "seconds": 0.0878557350000051
+}
