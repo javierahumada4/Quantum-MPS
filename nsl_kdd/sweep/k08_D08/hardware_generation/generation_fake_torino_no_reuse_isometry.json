@@ -1,0 +1,51 @@
+{
+  "shots": 1024,
+  "marginal_L1_hw_vs_ref": 0.12275781250000006,
+  "marginal_max_abs_hw_vs_ref": 0.030171875000000015,
+  "site_marginals_hw": [
+    0.5293,
+    0.5078,
+    0.5186,
+    0.5117,
+    0.5137,
+    0.4902,
+    0.4717,
+    0.4912
+  ],
+  "site_marginals_ref": [
+    0.4991,
+    0.5024,
+    0.4924,
+    0.5026,
+    0.5016,
+    0.476,
+    0.4501,
+    0.4952
+  ],
+  "topk_k": 10,
+  "topk_overlap": 0.3,
+  "freq_corr_hw_vs_ref": 0.47450908403419273,
+  "tvd_hw_vs_mps": 0.6242450328893818,
+  "tvd_ref_vs_mps": 0.035728655833182306,
+  "tvd_hw_vs_ref": 0.630828125,
+  "fidelity_hw_vs_mps": 0.44216805573538825,
+  "hellinger_hw_vs_mps": 0.5788288318794625,
+  "mc_noise_scale": 0.25,
+  "marginal_L1_hw_vs_mps": 0.14304746230282417,
+  "marginal_max_abs_hw_vs_mps": 0.03520885034463361,
+  "site_marginals_mps": [
+    0.4981,
+    0.4978,
+    0.4833,
+    0.4971,
+    0.5002,
+    0.484,
+    0.4457,
+    0.4975
+  ],
+  "backend": "fake:torino (133q, ruido de dispositivo real)",
+  "variant": "no_reuse_isometry",
+  "seconds": 6.720451561999653,
+  "executed_depth": 2701,
+  "executed_2q_gates": 789
+}

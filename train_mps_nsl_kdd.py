@@ -51,7 +51,7 @@ CONFIG = DMRGConfig(
     num_descent_steps=2,
 
     # mps capacity
-    max_bond_dim=32,
+    max_bond_dim=4,
     init_bond_cap=4,
     bond_growth_factor=2.0,
     discarded_weight_threshold=1e-3,

@@ -1,4 +1,0 @@
-difficulty_bucket,n_samples,recall_at_threshold,evaluated_at
-difficulty_0_to_15,3255,0.437174,p99
-difficulty_15_to_19,4699,0.488402,p99
-difficulty_19_to_21,4879,0.935028,p99
