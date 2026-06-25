@@ -147,9 +147,20 @@ def sample_backend(qc, backend, shots: int, opt_level: int, kind: str) -> Tuple[
     else:  # fake -> SamplerV2 de Aer construido desde el backend (incluye su ruido)
         from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
         sampler = AerSamplerV2.from_backend(backend)
-    sampler.options.default_shots = shots
+    # En algunas versiones de SamplerV2, `options.default_shots` no afecta a
+    # AerSamplerV2.from_backend y se queda en el default interno (1024).
+    # Pasar `shots` directamente a run(...) hace que fake/real usen exactamente
+    # el mismo numero de shots que Aer ideal. Mantenemos el fallback por
+    # compatibilidad con versiones que no acepten el argumento keyword.
+    try:
+        sampler.options.default_shots = shots
+    except Exception:
+        pass
 
-    result = sampler.run([tqc]).result()
+    try:
+        result = sampler.run([tqc], shots=shots).result()
+    except TypeError:
+        result = sampler.run([tqc]).result()
     data = result[0].data
     creg = next(iter(data.__dict__.keys()))
     counts = getattr(data, creg).get_counts()

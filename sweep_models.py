@@ -100,6 +100,50 @@ def load_feature_order(path: Optional[Path], train_X: torch.Tensor) -> List[int]
     return order
 
 
+def schema_feature_names(schema: Dict[str, Any]) -> List[str]:
+    """Devuelve el nombre real de cada sitio del encoder.
+
+    Compatibilidad:
+      * schemas antiguos: {"feature_names": [...]}
+      * encoder full-binary actual: {"features": [{"site": i, "name": ...}, ...]}
+    Si falta algun nombre, conserva un fallback explicito site_i.
+    """
+    if isinstance(schema.get("feature_names"), list):
+        names = [str(x) for x in schema["feature_names"]]
+    elif isinstance(schema.get("features"), list):
+        feats = schema["features"]
+        n = int(schema.get("n_features") or len(feats))
+        names = [f"site_{i}" for i in range(n)]
+        for pos, feat in enumerate(feats):
+            if not isinstance(feat, dict):
+                continue
+            site = int(feat.get("site", pos))
+            if 0 <= site < len(names):
+                names[site] = str(feat.get("name") or f"site_{site}")
+    else:
+        n = len(schema.get("physical_dims", []))
+        names = [f"site_{i}" for i in range(n)]
+    return names
+
+
+def schema_features_for_sites(schema: Dict[str, Any], sites: List[int]) -> List[Dict[str, Any]]:
+    """Subselecciona metadata de features y reindexa los sitios del schema reducido."""
+    features = schema.get("features")
+    if not isinstance(features, list):
+        return []
+    by_site: Dict[int, Dict[str, Any]] = {}
+    for pos, feat in enumerate(features):
+        if isinstance(feat, dict):
+            by_site[int(feat.get("site", pos))] = dict(feat)
+    out: List[Dict[str, Any]] = []
+    for new_site, old_site in enumerate(sites):
+        feat = dict(by_site.get(int(old_site), {"name": f"site_{int(old_site)}", "d": 2}))
+        feat["site"] = int(new_site)
+        feat["source_site"] = int(old_site)
+        out.append(feat)
+    return out
+
+
 def write_reduced_dir(out_dir: Path, schema: Dict, train_X, val_X, sites: List[int]):
     """Escribe un data_dir reducido con las columnas (sitios) seleccionadas."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -108,12 +152,20 @@ def write_reduced_dir(out_dir: Path, schema: Dict, train_X, val_X, sites: List[i
     if val_X is not None:
         torch.save(val_X.index_select(1, idx).cpu(), out_dir / "val_normal_X.pt")
 
+    all_names = schema_feature_names(schema)
+    selected_names = [all_names[int(s)] if 0 <= int(s) < len(all_names) else f"site_{int(s)}"
+                      for s in sites]
+
     red = dict(schema)
     red["physical_dims"] = [int(schema["physical_dims"][s]) for s in sites]
-    if "feature_names" in schema:
-        red["feature_names"] = [schema["feature_names"][s] for s in sites]
+    red["n_features"] = len(sites)
+    red["feature_names"] = selected_names
+    reduced_features = schema_features_for_sites(schema, sites)
+    if reduced_features:
+        red["features"] = reduced_features
     red["selected_sites"] = [int(s) for s in sites]
-    (out_dir / "encoding_schema.json").write_text(json.dumps(red, indent=2))
+    red["selected_feature_names"] = selected_names
+    (out_dir / "encoding_schema.json").write_text(json.dumps(jsonable(red), indent=2, ensure_ascii=False))
 
 
 def train_reduced(out_dir: Path, max_bond_dim: int, num_loops: Optional[int],
@@ -324,7 +376,7 @@ def summarize_training(data_dir: Path) -> Dict[str, Any]:
 
 
 def feature_names_for_sites(schema: Dict[str, Any], sites: List[int]) -> List[str]:
-    names = schema.get("feature_names") or []
+    names = schema_feature_names(schema)
     out = []
     for s in sites:
         if 0 <= int(s) < len(names):
