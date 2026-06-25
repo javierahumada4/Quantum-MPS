@@ -416,6 +416,15 @@ def main():
                     help="lista de variantes a evaluar en fidelidad, separadas por coma. "
                          "p.ej. no_reuse_isometry,reuse_unitary,reuse_isometry,no_reuse_unitary")
     ap.add_argument("--shots", type=int, default=8000)
+    ap.add_argument("--seeds", type=str, default=None,
+                    help="semillas de MUESTREO separadas por coma, p.ej. 0,1,2,3,4. "
+                         "OJO: en variantes reuse (circuito dinamico) Aer no genera "
+                         "ruido de disparo real, asi que su _std sale ~0 (artefacto). "
+                         "Para barras de error fiables usa --bootstrap.")
+    ap.add_argument("--bootstrap", type=int, default=0,
+                    help="B remuestreos bootstrap de los counts -> barra de error "
+                         "de ruido de disparo REAL y uniforme para todas las "
+                         "variantes (recomendado, p.ej. 300). Prioritario sobre --seeds.")
     ap.add_argument("--scripts-dir", type=Path, default=Path(__file__).resolve().parent)
     ap.add_argument("--out-dir", type=Path, default=None)
     ap.add_argument("--sweep-name", default=None,
@@ -529,14 +538,17 @@ def main():
 
             for variant in variants:
                 print(f"  [4] run_generative ({variant}) aer + fake:{args.device}...")
+                seed_args = ["--seeds", args.seeds] if args.seeds else []
+                if args.bootstrap > 0:
+                    seed_args += ["--bootstrap", str(args.bootstrap)]
                 gen_aer_rc = run_script("run_generative_mps_ibm.py",
                            [str(kdir), "--backend", "aer", "--variant", variant,
-                            "--shots", str(args.shots)], sd)
+                            "--shots", str(args.shots)] + seed_args, sd)
                 gen_aer = read_json(kdir / "hardware_generation" /
                                     f"generation_aer_{variant}.json")
                 gen_fake_rc = run_script("run_generative_mps_ibm.py",
                            [str(kdir), "--backend", f"fake:{args.device}", "--variant", variant,
-                            "--shots", str(args.shots)], sd)
+                            "--shots", str(args.shots)] + seed_args, sd)
                 gen_fake = read_json(kdir / "hardware_generation" /
                                      f"generation_fake_{args.device}_{variant}.json")
 
@@ -564,23 +576,39 @@ def main():
                     "routing_inflation": hvar.get("routing_inflation_2q"),
                     "device_depth": hvar.get("device_depth"),
                     "ideal_fidelity": (gen_aer or {}).get("fidelity_hw_vs_mps"),
+                    "ideal_tvd_vs_mps": (gen_aer or {}).get("tvd_hw_vs_mps"),  # suelo MC
                     "hw_fidelity": (gen_fake or {}).get("fidelity_hw_vs_mps"),
                     "hw_marginal_L1_vs_mps": (gen_fake or {}).get("marginal_L1_hw_vs_mps"),
                     "hw_tvd_vs_mps": (gen_fake or {}).get("tvd_hw_vs_mps"),
                     "hw_tvd_vs_ideal": (gen_fake or {}).get("tvd_hw_vs_ref"),
                     "hw_topk_overlap": (gen_fake or {}).get("topk_overlap"),
+
+                    # Barras de error (semillas o bootstrap). El metodo recomendado
+                    # es bootstrap (uniforme; en reuse las semillas dan _std~0).
+                    "error_bar_method": (gen_fake or {}).get("error_bar_method", "none"),
+                    "n_error_samples": ((gen_fake or {}).get("n_boots")
+                                        or (gen_fake or {}).get("n_seeds", 1)),
+                    "n_seeds": (gen_fake or {}).get("n_seeds", 1),
+                    "hw_fidelity_std": (gen_fake or {}).get("fidelity_hw_vs_mps_std"),
+                    "hw_tvd_vs_mps_std": (gen_fake or {}).get("tvd_hw_vs_mps_std"),
+                    "hw_marginal_L1_vs_mps_std": (gen_fake or {}).get("marginal_L1_hw_vs_mps_std"),
+                    "ideal_fidelity_std": (gen_aer or {}).get("fidelity_hw_vs_mps_std"),
                 }
 
                 # Métricas completas autocontenidas: no hace falta abrir subcarpetas.
+                # Saltamos per_seed para no meter una lista anidada enorme en cada fila
+                # (queda igualmente en el JSON de hardware_generation/).
                 add_prefixed_fields(row, "circuit", cvar)
                 add_prefixed_fields(row, "routed", hvar)
-                add_prefixed_fields(row, "aer", gen_aer)
-                add_prefixed_fields(row, "fake", gen_fake)
+                add_prefixed_fields(row, "aer", gen_aer, skip={"per_seed"})
+                add_prefixed_fields(row, "fake", gen_fake, skip={"per_seed"})
 
                 rows.append(row)
                 persist_progress()
+                std = row.get("hw_fidelity_std")
+                std_s = f" +/- {std:.4f}" if isinstance(std, (int, float)) else ""
                 print(f"    -> {variant}: device_2q={row['device_2q']}, "
-                      f"hw_fidelity={row['hw_fidelity']}, "
+                      f"hw_fidelity={row['hw_fidelity']}{std_s}, "
                       f"marginal_L1={row['hw_marginal_L1_vs_mps']}")
 
     # --- guardar y resumir ---
@@ -591,7 +619,8 @@ def main():
         all_df = pd.DataFrame(existing_rows + rows)
         cols = ["sweep_run_id", "k", "D_max", "b_max", "variant", "logical_qubits",
                 "device_2q", "device_depth", "routing_inflation",
-                "hw_fidelity", "hw_marginal_L1_vs_mps", "hw_tvd_vs_mps",
+                "hw_fidelity", "hw_fidelity_std", "hw_marginal_L1_vs_mps", "hw_tvd_vs_mps",
+                "error_bar_method", "n_error_samples",
                 "train_best_val_nll", "train_final_val_nll"]
         shown = [c for c in cols if c in df.columns]
         print("\n" + "=" * 78)

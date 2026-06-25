@@ -1,0 +1,101 @@
+{
+  "n_features": 6,
+  "physical_dims": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+  ],
+  "features": [
+    {
+      "site": 0,
+      "name": "service",
+      "kind": "categorical_binary",
+      "d": 2,
+      "vocab": [
+        "domain_u",
+        "ftp",
+        "ftp_data",
+        "http",
+        "other",
+        "private",
+        "smtp",
+        "telnet"
+      ],
+      "source_site": 2
+    },
+    {
+      "site": 1,
+      "name": "flag",
+      "kind": "categorical_binary",
+      "d": 2,
+      "vocab": [
+        "REJ",
+        "SF"
+      ],
+      "source_site": 3
+    },
+    {
+      "site": 2,
+      "name": "wrong_fragment",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0,
+      "source_site": 7
+    },
+    {
+      "site": 3,
+      "name": "count",
+      "kind": "numeric",
+      "d": 2,
+      "edges": [
+        null,
+        4.0,
+        null
+      ],
+      "source_site": 21
+    },
+    {
+      "site": 4,
+      "name": "rerror_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 0.0,
+      "source_site": 25
+    },
+    {
+      "site": 5,
+      "name": "same_srv_rate",
+      "kind": "constant_normal",
+      "d": 2,
+      "normal_value": 1.0,
+      "source_site": 27
+    }
+  ],
+  "feature_names": [
+    "service",
+    "flag",
+    "wrong_fragment",
+    "count",
+    "rerror_rate",
+    "same_srv_rate"
+  ],
+  "selected_sites": [
+    2,
+    3,
+    7,
+    21,
+    25,
+    27
+  ],
+  "selected_feature_names": [
+    "service",
+    "flag",
+    "wrong_fragment",
+    "count",
+    "rerror_rate",
+    "same_srv_rate"
+  ]
+}
