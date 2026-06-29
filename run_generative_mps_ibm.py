@@ -14,10 +14,13 @@ distribucion; este script lo cuantifica.
 
 Backends:
     --backend aer            simulador ideal (referencia, v ~ P_MPS exacto)
-    --backend fake:brisbane  foto ruidosa de un dispositivo real (Eagle)
-    --backend fake:torino    foto ruidosa de un dispositivo real (Heron)
-    --backend real           QPU real (menos ocupada) via QiskitRuntimeService
-    --backend real:ibm_torino   QPU real concreta
+    --backend fake:brisbane     foto ruidosa de un dispositivo real (Eagle)
+    --backend fake:torino       foto ruidosa de un dispositivo real (Heron r1)
+    --backend fake:fez          foto ruidosa de ibm_fez (Heron r2)
+    --backend fake:marrakesh    foto ruidosa de ibm_marrakesh (Heron r2)
+    --backend fake:kingston     foto ruidosa de ibm_kingston (Heron r2)
+    --backend real              QPU real (menos ocupada) via QiskitRuntimeService
+    --backend real:ibm_fez      QPU real concreta emparejada con fake:fez
 
 Metricas (escalan a N grande):
     - TVD frente al MPS (exacto si N<=16; si no, sobre el soporte observado)
@@ -31,18 +34,16 @@ Uso:
     python run_generative_mps_ibm.py ./nsl_kdd_qc6 --backend aer --shots 8000
 
     # ensayo con ruido realista del dispositivo
-    python run_generative_mps_ibm.py ./nsl_kdd_qc6 --backend fake:torino
+    python run_generative_mps_ibm.py ./nsl_kdd_qc6 --backend fake:fez
 
     # ejecucion REAL en IBM (requiere cuenta guardada o --token)
-    python run_generative_mps_ibm.py ./nsl_kdd_qc6 --backend real:ibm_torino \
+    python run_generative_mps_ibm.py ./nsl_kdd_qc6 --backend real:ibm_fez \
         --shots 4000 --variant reuse_isometry
 
 Credenciales IBM (una vez):
     from qiskit_ibm_runtime import QiskitRuntimeService
     QiskitRuntimeService.save_account(channel="ibm_quantum", token="TU_TOKEN")
 """
-
-from __future__ import annotations
 
 import argparse
 import importlib.util
@@ -58,6 +59,13 @@ import torch
 from qiskit import ClassicalRegister, transpile
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit_aer import AerSimulator
+from qiskit_ibm_runtime.fake_provider import (
+    FakeBrisbane,
+    FakeFez,
+    FakeKingston,
+    FakeMarrakesh,
+    FakeTorino,
+)
 
 
 # ----------------------------------------------------------------------
@@ -110,15 +118,33 @@ def counts_to_site_order(counts: Dict[str, int]) -> Dict[str, int]:
 # ----------------------------------------------------------------------
 # Backends y muestreo
 # ----------------------------------------------------------------------
+SUPPORTED_FAKE_BACKENDS = {
+    "brisbane": FakeBrisbane,
+    "torino": FakeTorino,
+    "fez": FakeFez,
+    "marrakesh": FakeMarrakesh,
+    "kingston": FakeKingston,
+}
+
+
+def _load_fake_backend(name: str):
+    key = name.lower().replace("ibm_", "")
+    if key not in SUPPORTED_FAKE_BACKENDS:
+        raise ValueError(
+            f"fake backend desconocido: {name!r}. Usa uno de: "
+            f"{', '.join(sorted(SUPPORTED_FAKE_BACKENDS))}"
+        )
+    return SUPPORTED_FAKE_BACKENDS[key](), key
+
+
 def get_target(backend_spec: str):
     """Devuelve (sampler_kind, backend_obj_or_None, descripcion)."""
     if backend_spec == "aer":
         return "aer_ideal", None, "Aer ideal (referencia)"
     if backend_spec.startswith("fake:"):
-        from qiskit_ibm_runtime.fake_provider import FakeBrisbane, FakeTorino
         name = backend_spec.split(":", 1)[1]
-        be = {"brisbane": FakeBrisbane, "torino": FakeTorino}[name]()
-        return "fake", be, f"fake:{name} ({be.num_qubits}q, ruido de dispositivo real)"
+        be, key = _load_fake_backend(name)
+        return "fake", be, f"fake:{key} ({be.num_qubits}q, ruido de dispositivo real)"
     if backend_spec.startswith("real"):
         from qiskit_ibm_runtime import QiskitRuntimeService
         service = QiskitRuntimeService()
@@ -168,18 +194,8 @@ def run_backend(tqc, backend, shots: int, kind: str,
         sampler = RuntimeSampler(backend)
     else:  # fake -> SamplerV2 de Aer con el modelo de ruido del backend
         from qiskit_aer.primitives import SamplerV2 as AerSamplerV2
-        if seed is not None:
-            sampler = AerSamplerV2.from_backend(backend, seed=int(seed))
-        else:
-            sampler = AerSamplerV2.from_backend(backend)
-    try:
-        sampler.options.default_shots = shots
-    except Exception:
-        pass
-    try:
-        result = sampler.run([tqc], shots=shots).result()
-    except TypeError:
-        result = sampler.run([tqc]).result()
+        sampler = AerSamplerV2.from_backend(backend, seed=int(seed))
+    result = sampler.run([tqc], shots=shots).result()
     data = result[0].data
     creg = next(iter(data.__dict__.keys()))
     return getattr(data, creg).get_counts()
@@ -327,29 +343,111 @@ def _aggregate_over_seeds(per_seed: List[Dict[str, Any]]) -> Dict[str, Any]:
     return _aggregate(per_seed, "seed", keep_per_item=True)
 
 
+def _resample_counts(rng: np.random.Generator, counts: Dict[str, int], shots: int) -> Dict[str, int]:
+    """Multinomial bootstrap from an observed count dictionary."""
+    keys = list(counts)
+    probs = np.array([counts[k] for k in keys], dtype=np.float64)
+    total = probs.sum()
+    if total <= 0:
+        return {}
+    probs = probs / total
+    draw = rng.multinomial(int(shots), probs)
+    return {k: int(d) for k, d in zip(keys, draw) if d > 0}
+
+
 def bootstrap_metrics(mps, N: int, tgt_counts: Dict[str, int],
                       ref_counts: Dict[str, int], shots: int,
-                      B: int, seed: int = 0) -> Dict[str, Any]:
-    """Barra de error por bootstrap de los counts del objetivo.
+                      B: int, seed: int = 0,
+                      ref_shots: Optional[int] = None) -> Dict[str, Any]:
+    """Bootstrap de ruido de disparo para una seed del experimento.
 
-    Trata ``tgt_counts`` como la distribucion ruidosa devuelta por el backend y
-    remuestrea ``shots`` extracciones B veces (multinomial), recomputando las
-    metricas. Da media y ``<clave>_std`` del RUIDO DE DISPARO. Funciona igual
-    para circuitos estaticos y dinamicos (reuse), donde el re-muestreo de Aer no
-    genera ruido real. Reproducible via ``seed``.
+    Remuestrea de forma multinomial los counts del objetivo y tambien los de la
+    referencia ideal. Asi las barras de ``TVD(ideal, MPS)`` y
+    ``TVD(hardware, ideal)`` incluyen la incertidumbre de shots de ambas
+    muestras. Funciona igual para circuitos estaticos y dinamicos (reuse), donde
+    repetir Aer con distintas seeds puede no inyectar ruido de disparo real.
     """
     rng = np.random.default_rng(seed)
-    keys = list(tgt_counts)
-    probs = np.array([tgt_counts[k] for k in keys], dtype=np.float64)
-    probs = probs / probs.sum()
+    ref_shots = int(ref_shots or shots)
     per_boot: List[Dict[str, Any]] = []
     for b in range(B):
-        draw = rng.multinomial(shots, probs)
-        resampled = {k: int(d) for k, d in zip(keys, draw) if d > 0}
-        m = generative_metrics(mps, N, resampled, ref_counts)
+        tgt_resampled = _resample_counts(rng, tgt_counts, shots)
+        ref_resampled = _resample_counts(rng, ref_counts, ref_shots)
+        m = generative_metrics(mps, N, tgt_resampled, ref_resampled)
         m["boot"] = b
         per_boot.append(m)
-    return _aggregate(per_boot, "boot", keep_per_item=False)
+    out = _aggregate(per_boot, "boot", keep_per_item=False)
+    out["bootstrap_resamples"] = int(B)
+    return out
+
+
+def _metric_scalar_keys(d: Dict[str, Any]) -> List[str]:
+    """Metric scalar keys, excluding std components and bookkeeping."""
+    skip = {
+        "seed", "boot", "seconds", "topk_k", "mc_noise_scale", "shots",
+        "bootstrap_resamples", "n_boots", "n_seeds",
+        "executed_depth", "executed_2q_gates", "transpile_seed",
+    }
+    keys: List[str] = []
+    for k, v in d.items():
+        if k in skip or k.endswith("_std") or k.endswith("_std_seed") \
+                or k.endswith("_std_bootstrap") or k.endswith("_std_total"):
+            continue
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            keys.append(k)
+    return keys
+
+
+def aggregate_seed_bootstrap(per_seed: List[Dict[str, Any]],
+                             per_seed_bootstrap: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Combina replicas y bootstrap: Var_total = Var_seed + E[Var_boot].
+
+    Para cada seed ``s`` se toma ``mu_s`` como la media bootstrap de esa seed y
+    ``v_s`` como su varianza bootstrap. Se reporta:
+      * ``<metric>_std_seed``      = std entre ``mu_s``;
+      * ``<metric>_std_bootstrap`` = sqrt(mean_s(v_s));
+      * ``<metric>_std_total``     = sqrt(std_seed^2 + std_bootstrap^2).
+    ``<metric>_std`` se deja como alias corto de ``<metric>_std_total``.
+    """
+    base = _aggregate_over_seeds(per_seed) if len(per_seed) > 1 else dict(per_seed[0])
+    if not per_seed_bootstrap:
+        return base
+
+    metric_keys = sorted(set().union(*(_metric_scalar_keys(b) for b in per_seed_bootstrap)))
+    n_seeds = len(per_seed_bootstrap)
+    for key in metric_keys:
+        mus = []
+        boot_vars = []
+        for boot in per_seed_bootstrap:
+            if isinstance(boot.get(key), (int, float)):
+                mus.append(float(boot[key]))
+                std_b = boot.get(f"{key}_std")
+                boot_vars.append(float(std_b) ** 2 if isinstance(std_b, (int, float)) else 0.0)
+        if not mus:
+            continue
+        mu = float(np.mean(mus))
+        std_seed = float(np.std(mus, ddof=1)) if len(mus) >= 2 else 0.0
+        std_boot = float(np.sqrt(np.mean(boot_vars))) if boot_vars else 0.0
+        std_total = float(np.sqrt(std_seed ** 2 + std_boot ** 2))
+        base[key] = mu
+        base[f"{key}_std_seed"] = std_seed
+        base[f"{key}_std_bootstrap"] = std_boot
+        base[f"{key}_std_total"] = std_total
+        base[f"{key}_std"] = std_total
+
+    base["n_seeds"] = len(per_seed)
+    base["n_boots"] = int(per_seed_bootstrap[0].get("n_boots") or
+                          per_seed_bootstrap[0].get("bootstrap_resamples") or 0)
+    base["per_seed_bootstrap"] = [
+        {
+            "seed": per_seed[i].get("seed"),
+            "transpile_seed": per_seed[i].get("transpile_seed"),
+            **{k: v for k, v in boot.items()
+               if k in metric_keys or k.endswith("_std") or k in ("n_boots", "bootstrap_resamples")},
+        }
+        for i, boot in enumerate(per_seed_bootstrap)
+    ]
+    return base
 
 
 def main():
@@ -363,36 +461,21 @@ def main():
                     choices=["reuse_isometry", "reuse_unitary",
                              "no_reuse_isometry", "no_reuse_unitary"])
     ap.add_argument("--backend", default="aer",
-                    help="aer | fake:brisbane | fake:torino | real | real:NAME")
+                    help="aer | fake:brisbane | fake:torino | fake:fez | fake:marrakesh | fake:kingston | real | real:NAME")
     ap.add_argument("--opt-level", type=int, default=3)
     ap.add_argument("--basis", default="cx,rz,sx,x", help="base para el muestreo ideal")
     ap.add_argument("--shots", type=int, default=8000)
     ap.add_argument("--ref-shots", type=int, default=0,
                     help="shots para la referencia ideal (0 = usar --shots)")
-    ap.add_argument("--seed", type=int, default=None,
-                    help="semilla de MUESTREO (reproducible). None = aleatoria.")
-    ap.add_argument("--seeds", type=str, default=None,
-                    help="lista de semillas separadas por coma, p.ej. 0,1,2,3,4. "
-                         "Transpila UNA vez y repite solo el muestreo por semilla; "
-                         "la salida da media y <clave>_std. Tiene prioridad sobre --seed.")
-    ap.add_argument("--transpile-seed", type=int, default=1234,
-                    help="semilla del transpilador (routing). Fija => circuito "
-                         "determinista entre invocaciones.")
+    ap.add_argument("--seeds", type=str, default="1",
+                    help="lista de semillas separadas por coma, p.ej. 1,2,3,4,5; "
+                         "cada seed se usa tambien como seed del transpilador.")
     ap.add_argument("--bootstrap", type=int, default=0,
-                    help="si >0, barra de error por bootstrap de los counts (B "
-                         "remuestreos). RECOMENDADO: es el unico metodo que da "
-                         "ruido de disparo real tambien en circuitos reuse "
-                         "(dinamicos), donde Aer no lo genera. Tiene prioridad "
-                         "sobre --seeds para las columnas _std.")
+                    help="si >0, B remuestreos bootstrap por seed; las columnas _std "
+                         "combinan variacion entre seeds y ruido de shots.")
     args = ap.parse_args()
 
-    # semillas efectivas
-    if args.seeds:
-        seeds: List[Optional[int]] = [int(s) for s in args.seeds.split(",") if s.strip() != ""]
-    elif args.seed is not None:
-        seeds = [args.seed]
-    else:
-        seeds = [None]  # una corrida sin semilla (comportamiento previo)
+    seeds: List[int] = [int(s) for s in args.seeds.split(",") if s.strip()]
 
     mod = load_module(args.module_path)
     mps = mod.MPS.load(str(args.data_dir / args.model))
@@ -405,31 +488,27 @@ def main():
 
     basis = tuple(x.strip() for x in args.basis.split(",") if x.strip())
     ref_shots = args.ref_shots or args.shots
-
-    # --- TRANSPILAR UNA SOLA VEZ (asi solo varia la semilla de muestreo) ---
-    tqc_ideal = transpile_ideal(qc, basis, seed_transpiler=args.transpile_seed)
     kind, backend, desc = get_target(args.backend)
     print(f"backend objetivo: {desc}")
-    if kind == "aer_ideal":
-        tqc_dev = None
-        n2q = None
-    else:
-        tqc_dev = transpile_backend(qc, backend, args.opt_level,
-                                    seed_transpiler=args.transpile_seed)
-        n2q = sum(v for g, v in tqc_dev.count_ops().items()
-                  if g in ("cx", "cz", "ecr", "rzz"))
-        print(f"  circuito ejecutado (transpilado 1 vez): "
-              f"profundidad {tqc_dev.depth()}, {n2q} puertas 2q")
 
     print(f"\nmuestreo con {len(seeds)} semilla(s): {seeds}")
+    print("routing/transpile con la misma seed que el muestreo")
     per_seed: List[Dict[str, Any]] = []
-    first_tgt_counts: Optional[Dict[str, int]] = None
-    first_ref_counts: Optional[Dict[str, int]] = None
+    per_seed_bootstrap: List[Dict[str, Any]] = []
     for sd in seeds:
         t0 = time.perf_counter()
-        # referencia ideal con semilla INDEPENDIENTE del objetivo (si no, en el
-        # modo aer ref==tgt y las metricas hw-vs-ideal serian triviales).
-        ref_seed = None if sd is None else sd + 10_000
+        tseed = int(sd)
+        tqc_ideal = transpile_ideal(qc, basis, seed_transpiler=tseed)
+        if kind == "aer_ideal":
+            tqc_dev = None
+            n2q = None
+        else:
+            tqc_dev = transpile_backend(qc, backend, args.opt_level, seed_transpiler=tseed)
+            n2q = sum(v for g, v in tqc_dev.count_ops().items()
+                      if g in ("cx", "cz", "ecr", "rzz"))
+
+        # referencia ideal con semilla independiente del objetivo.
+        ref_seed = sd + 10_000
         ref_counts = counts_to_site_order(run_ideal(tqc_ideal, ref_shots, seed=ref_seed))
         if kind == "aer_ideal":
             tgt_counts = counts_to_site_order(run_ideal(tqc_ideal, args.shots, seed=sd))
@@ -438,28 +517,37 @@ def main():
                 run_backend(tqc_dev, backend, args.shots, kind, seed=sd))
         seconds = time.perf_counter() - t0
 
-        if first_tgt_counts is None:
-            first_tgt_counts, first_ref_counts = tgt_counts, ref_counts
-
         m = generative_metrics(mps, N, tgt_counts, ref_counts)
         m["seed"] = sd
+        m["transpile_seed"] = tseed
+        if tqc_dev is not None:
+            m["executed_depth"] = int(tqc_dev.depth())
+            m["executed_2q_gates"] = int(n2q)
         m["seconds"] = seconds
         per_seed.append(m)
+
+        if args.bootstrap > 0:
+            boot_seed = int(sd) + 1_000_000
+            boot = bootstrap_metrics(mps, N, tgt_counts, ref_counts,
+                                     args.shots, args.bootstrap,
+                                     seed=boot_seed, ref_shots=ref_shots)
+            boot["seed"] = sd
+            boot["transpile_seed"] = tseed
+            per_seed_bootstrap.append(boot)
+
         fid = m.get("fidelity_hw_vs_mps")
-        print(f"  seed={sd}: fidelidad={fid if fid is None else round(fid,4)}, "
-              f"{len(tgt_counts)} bitstrings, {seconds:.1f}s")
+        route_s = "" if tqc_dev is None else f", 2q={n2q}, depth={tqc_dev.depth()}"
+        print(f"  seed={sd} / transpile_seed={tseed}: "
+              f"fidelidad={fid if fid is None else round(fid,4)}, "
+              f"{len(tgt_counts)} bitstrings{route_s}, {seconds:.1f}s")
 
     # --- agregado / barra de error ---
     error_bar_method = "none"
     if args.bootstrap > 0:
-        # Bootstrap de los counts del primer muestreo: ruido de disparo real,
-        # uniforme para todas las variantes (incl. reuse dinamico).
-        boot_seed = seeds[0] if seeds[0] is not None else 0
-        print(f"\nbootstrap: {args.bootstrap} remuestreos de los counts "
-              f"(ruido de disparo, valido tambien en reuse)...")
-        metrics = bootstrap_metrics(mps, N, first_tgt_counts, first_ref_counts,
-                                    args.shots, args.bootstrap, seed=boot_seed)
-        error_bar_method = "bootstrap"
+        print(f"\nbootstrap: {args.bootstrap} remuestreos por seed "
+              f"+ combinacion Var_total = Var_seed + E[Var_boot]...")
+        metrics = aggregate_seed_bootstrap(per_seed, per_seed_bootstrap)
+        error_bar_method = "seed+bootstrap"
     elif len(per_seed) == 1:
         metrics = dict(per_seed[0])
     else:
@@ -471,9 +559,20 @@ def main():
     metrics["variant"] = args.variant
     metrics["N_sites"] = int(N)
     metrics["b_max"] = int(b_max)
-    if tqc_dev is not None:
-        metrics["executed_depth"] = int(tqc_dev.depth())
-        metrics["executed_2q_gates"] = int(n2q)
+    metrics["transpile_seeds"] = [m.get("transpile_seed") for m in per_seed]
+    metrics["n_transpile_seeds"] = len(set(metrics["transpile_seeds"]))
+
+    # En modo seed+bootstrap, las metricas usan la formula de varianza total;
+    # aun asi conservamos/agrupamos los recursos del routing por seed.
+    if args.bootstrap > 0 and per_seed and per_seed[0].get("executed_2q_gates") is not None:
+        for key in ("executed_depth", "executed_2q_gates"):
+            vals = np.asarray([m[key] for m in per_seed], dtype=float)
+            if np.allclose(vals, vals[0], rtol=0.0, atol=0.0):
+                metrics[key] = int(vals[0])
+            else:
+                metrics[key] = float(vals.mean())
+            if len(vals) > 1:
+                metrics[f"{key}_std"] = float(vals.std(ddof=1))
 
     print("\n" + "=" * 70)
     tag_seeds = f"{len(seeds)} semillas" if len(seeds) > 1 else f"seed={seeds[0]}"
@@ -493,7 +592,10 @@ def main():
         print(f"  TVD(hw,MPS) soporte obs. : {metrics['tvd_hw_vs_mps_observed_support']:.4f}")
         print(f"  masa MPS en soporte obs. : {metrics['mps_mass_on_observed_support']:.4f}")
         print(f"  marginal L1 (hw vs ideal): {metrics['marginal_L1_hw_vs_ref']:.4f}")
-    if len(seeds) > 1:
+    if args.bootstrap > 0:
+        print(f"  (agregado sobre {len(seeds)} semillas y {args.bootstrap} bootstraps/seed; "
+              "las claves _std son std_total)")
+    elif len(seeds) > 1:
         print(f"  (agregado sobre {len(seeds)} semillas; las claves _std son la desv. tipica)")
 
     out_dir = args.out_dir or (args.data_dir / "hardware_generation")

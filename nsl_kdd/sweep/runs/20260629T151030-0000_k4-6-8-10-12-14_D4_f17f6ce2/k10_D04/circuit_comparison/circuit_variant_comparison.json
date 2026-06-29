@@ -1,0 +1,270 @@
+[
+  {
+    "variant": "no_reuse_unitary",
+    "synthesis": "unitary",
+    "reuse": false,
+    "build_error": null,
+    "build_seconds": 0.0021648609999829205,
+    "N_sites": 10,
+    "b_max": 2,
+    "num_qubits": 12,
+    "num_clbits": 0,
+    "high_level_depth": 10,
+    "high_level_size": 10,
+    "high_level_ops": {
+      "unitary": 10
+    },
+    "statevector_leakage": 0.0,
+    "statevector_max_abs_err": 2.7755575615628914e-16,
+    "statevector_l1_err": 1.2665006749660972e-15,
+    "statevector_tvd": 6.332503374830486e-16,
+    "statevector_exact_match": true,
+    "statevector_seconds": 0.013747797000178252,
+    "transpiled_depth": 696,
+    "transpiled_size": 1175,
+    "two_qubit_gates": 190,
+    "gate_breakdown": {
+      "rz": 591,
+      "sx": 394,
+      "cx": 190
+    },
+    "transpile_seconds": 0.2845871489998899,
+    "shots": 4000,
+    "num_observed_bitstrings": 83,
+    "sample_tvd_vs_mps": 0.03256759396115472,
+    "sample_max_abs_err_vs_mps": 0.0065459861627276406,
+    "sample_mc_noise_scale": 0.25298221281347033,
+    "top_counts": [
+      {
+        "bitstring_site_order": "0010010000",
+        "count": 743,
+        "frequency": 0.18575
+      },
+      {
+        "bitstring_site_order": "0000010000",
+        "count": 589,
+        "frequency": 0.14725
+      },
+      {
+        "bitstring_site_order": "0010000001",
+        "count": 579,
+        "frequency": 0.14475
+      },
+      {
+        "bitstring_site_order": "0010000000",
+        "count": 432,
+        "frequency": 0.108
+      },
+      {
+        "bitstring_site_order": "0000000000",
+        "count": 311,
+        "frequency": 0.07775
+      }
+    ],
+    "sampling_seconds": 0.05014899800062267,
+    "status": "ok"
+  },
+  {
+    "variant": "no_reuse_isometry",
+    "synthesis": "isometry",
+    "reuse": false,
+    "build_error": null,
+    "build_seconds": 0.0007764160000078846,
+    "N_sites": 10,
+    "b_max": 2,
+    "num_qubits": 12,
+    "num_clbits": 0,
+    "high_level_depth": 10,
+    "high_level_size": 10,
+    "high_level_ops": {
+      "isometry": 10
+    },
+    "statevector_leakage": 1.055086533196121e-31,
+    "statevector_max_abs_err": 1.2906342661267445e-14,
+    "statevector_l1_err": 7.529881442392605e-14,
+    "statevector_tvd": 3.764940721196303e-14,
+    "statevector_exact_match": true,
+    "statevector_seconds": 0.10558157800005574,
+    "transpiled_depth": 555,
+    "transpiled_size": 765,
+    "two_qubit_gates": 164,
+    "gate_breakdown": {
+      "rz": 350,
+      "sx": 220,
+      "cx": 164,
+      "x": 31
+    },
+    "transpile_seconds": 0.06734507899909659,
+    "shots": 4000,
+    "num_observed_bitstrings": 78,
+    "sample_tvd_vs_mps": 0.035692539193697345,
+    "sample_max_abs_err_vs_mps": 0.009545986162727643,
+    "sample_mc_noise_scale": 0.25298221281347033,
+    "top_counts": [
+      {
+        "bitstring_site_order": "0010010000",
+        "count": 731,
+        "frequency": 0.18275
+      },
+      {
+        "bitstring_site_order": "0000010000",
+        "count": 598,
+        "frequency": 0.1495
+      },
+      {
+        "bitstring_site_order": "0010000001",
+        "count": 591,
+        "frequency": 0.14775
+      },
+      {
+        "bitstring_site_order": "0010000000",
+        "count": 406,
+        "frequency": 0.1015
+      },
+      {
+        "bitstring_site_order": "0000000000",
+        "count": 310,
+        "frequency": 0.0775
+      }
+    ],
+    "sampling_seconds": 0.10775889000069583,
+    "status": "ok"
+  },
+  {
+    "variant": "reuse_unitary",
+    "synthesis": "unitary",
+    "reuse": true,
+    "build_error": null,
+    "build_seconds": 0.0019096030000582687,
+    "N_sites": 10,
+    "b_max": 2,
+    "num_qubits": 3,
+    "num_clbits": 10,
+    "high_level_depth": 29,
+    "high_level_size": 29,
+    "high_level_ops": {
+      "unitary": 10,
+      "measure": 10,
+      "reset": 9
+    },
+    "statevector_leakage": null,
+    "statevector_max_abs_err": null,
+    "statevector_l1_err": null,
+    "statevector_tvd": null,
+    "statevector_exact_match": null,
+    "transpiled_depth": 758,
+    "transpiled_size": 1194,
+    "two_qubit_gates": 190,
+    "gate_breakdown": {
+      "rz": 591,
+      "sx": 394,
+      "cx": 190,
+      "measure": 10,
+      "reset": 9
+    },
+    "transpile_seconds": 0.009982184999898891,
+    "shots": 4000,
+    "num_observed_bitstrings": 73,
+    "sample_tvd_vs_mps": 0.027901695954064477,
+    "sample_max_abs_err_vs_mps": 0.006165002523719446,
+    "sample_mc_noise_scale": 0.25298221281347033,
+    "top_counts": [
+      {
+        "bitstring_site_order": "0010010000",
+        "count": 770,
+        "frequency": 0.1925
+      },
+      {
+        "bitstring_site_order": "0000010000",
+        "count": 574,
+        "frequency": 0.1435
+      },
+      {
+        "bitstring_site_order": "0010000001",
+        "count": 571,
+        "frequency": 0.14275
+      },
+      {
+        "bitstring_site_order": "0010000000",
+        "count": 404,
+        "frequency": 0.101
+      },
+      {
+        "bitstring_site_order": "0000000000",
+        "count": 328,
+        "frequency": 0.082
+      }
+    ],
+    "sampling_seconds": 0.06156503399961366,
+    "status": "ok"
+  },
+  {
+    "variant": "reuse_isometry",
+    "synthesis": "isometry",
+    "reuse": true,
+    "build_error": null,
+    "build_seconds": 0.0007285120000233292,
+    "N_sites": 10,
+    "b_max": 2,
+    "num_qubits": 3,
+    "num_clbits": 10,
+    "high_level_depth": 29,
+    "high_level_size": 29,
+    "high_level_ops": {
+      "isometry": 10,
+      "measure": 10,
+      "reset": 9
+    },
+    "statevector_leakage": null,
+    "statevector_max_abs_err": null,
+    "statevector_l1_err": null,
+    "statevector_tvd": null,
+    "statevector_exact_match": null,
+    "transpiled_depth": 559,
+    "transpiled_size": 784,
+    "two_qubit_gates": 164,
+    "gate_breakdown": {
+      "rz": 350,
+      "sx": 220,
+      "cx": 164,
+      "x": 31,
+      "measure": 10,
+      "reset": 9
+    },
+    "transpile_seconds": 0.06929326099998434,
+    "shots": 4000,
+    "num_observed_bitstrings": 75,
+    "sample_tvd_vs_mps": 0.03309424448923954,
+    "sample_max_abs_err_vs_mps": 0.012535255334350737,
+    "sample_mc_noise_scale": 0.25298221281347033,
+    "top_counts": [
+      {
+        "bitstring_site_order": "0010010000",
+        "count": 793,
+        "frequency": 0.19825
+      },
+      {
+        "bitstring_site_order": "0000010000",
+        "count": 645,
+        "frequency": 0.16125
+      },
+      {
+        "bitstring_site_order": "0010000001",
+        "count": 584,
+        "frequency": 0.146
+      },
+      {
+        "bitstring_site_order": "0010000000",
+        "count": 404,
+        "frequency": 0.101
+      },
+      {
+        "bitstring_site_order": "0000000000",
+        "count": 314,
+        "frequency": 0.0785
+      }
+    ],
+    "sampling_seconds": 0.11558565300038026,
+    "status": "ok"
+  }
+]

@@ -34,7 +34,7 @@ Orden de features
 Uso:
     # barrido de features (D_max fijo)
     python sweep_models.py ./nsl_kdd --k-list 8,11,14,17 --bond-list 4 \
-        --device torino --variants no_reuse_isometry --shots 8000
+        --device fez --variants no_reuse_isometry --shots 8000
 
     # barrido de capacidad (k fijo)
     python sweep_models.py ./nsl_kdd --k-list 8 --bond-list 2,4,8 --shots 8000
@@ -46,8 +46,6 @@ Uso:
     # smoke test rapido
     python sweep_models.py ./nsl_kdd --k-list 8 --bond-list 2,4 --num-loops 5 --shots 2000
 """
-
-from __future__ import annotations
 
 import argparse
 import csv
@@ -101,43 +99,23 @@ def load_feature_order(path: Optional[Path], train_X: torch.Tensor) -> List[int]
 
 
 def schema_feature_names(schema: Dict[str, Any]) -> List[str]:
-    """Devuelve el nombre real de cada sitio del encoder.
-
-    Compatibilidad:
-      * schemas antiguos: {"feature_names": [...]}
-      * encoder full-binary actual: {"features": [{"site": i, "name": ...}, ...]}
-    Si falta algun nombre, conserva un fallback explicito site_i.
-    """
-    if isinstance(schema.get("feature_names"), list):
-        names = [str(x) for x in schema["feature_names"]]
-    elif isinstance(schema.get("features"), list):
-        feats = schema["features"]
-        n = int(schema.get("n_features") or len(feats))
-        names = [f"site_{i}" for i in range(n)]
-        for pos, feat in enumerate(feats):
-            if not isinstance(feat, dict):
-                continue
-            site = int(feat.get("site", pos))
-            if 0 <= site < len(names):
-                names[site] = str(feat.get("name") or f"site_{site}")
-    else:
-        n = len(schema.get("physical_dims", []))
-        names = [f"site_{i}" for i in range(n)]
+    """Devuelve el nombre real de cada sitio del encoder full-binary actual."""
+    feats = schema["features"]
+    n = int(schema.get("n_features") or len(feats))
+    names = [f"site_{i}" for i in range(n)]
+    for pos, feat in enumerate(feats):
+        site = int(feat.get("site", pos))
+        names[site] = str(feat.get("name") or f"site_{site}")
     return names
 
 
 def schema_features_for_sites(schema: Dict[str, Any], sites: List[int]) -> List[Dict[str, Any]]:
     """Subselecciona metadata de features y reindexa los sitios del schema reducido."""
-    features = schema.get("features")
-    if not isinstance(features, list):
-        return []
-    by_site: Dict[int, Dict[str, Any]] = {}
-    for pos, feat in enumerate(features):
-        if isinstance(feat, dict):
-            by_site[int(feat.get("site", pos))] = dict(feat)
+    by_site = {int(feat.get("site", pos)): dict(feat)
+               for pos, feat in enumerate(schema["features"])}
     out: List[Dict[str, Any]] = []
     for new_site, old_site in enumerate(sites):
-        feat = dict(by_site.get(int(old_site), {"name": f"site_{int(old_site)}", "d": 2}))
+        feat = dict(by_site[int(old_site)])
         feat["site"] = int(new_site)
         feat["source_site"] = int(old_site)
         out.append(feat)
@@ -271,22 +249,358 @@ def make_run_id(args, k_list: List[int], bond_list: List[int], variants: List[st
     return slugify(f"{compact_ts}_k{'-'.join(map(str, k_list))}_D{'-'.join(map(str, bond_list))}_{digest}")
 
 
-def load_existing_summary(path: Path) -> List[Dict[str, Any]]:
+
+# ----------------------------------------------------------------------
+# Resumen limpio: CSV paper-ready + JSON estructurado
+# ----------------------------------------------------------------------
+
+RUN_META_KEYS = [
+    "sweep_run_id", "sweep_name", "sweep_timestamp_utc", "sweep_command",
+    "sweep_root", "sweep_run_root", "source_data_dir", "scripts_dir",
+    "summary_mode", "device", "shots", "seeds_arg", "bootstrap", "num_loops_override",
+    "fixed_bond", "k_list_arg", "bond_list_arg", "variants_arg",
+    "feature_order_path", "feature_order_strategy", "N_full",
+    "n_train_normal_rows", "n_val_normal_rows",
+]
+
+# Columnas que quedan en sweep_summary.csv. Son las que se usan directamente
+# para las tablas/figuras del paper o para justificar el protocolo experimental.
+PAPER_CSV_COLUMNS = [
+    # run / protocolo
+    "sweep_run_id", "sweep_timestamp_utc", "device", "shots", "seeds_arg",
+    "bootstrap", "error_bar_method", "n_error_samples", "n_seeds",
+
+    # punto experimental
+    "k", "D_max", "requested_b_max_log2_D", "b_max",
+    "variant", "synthesis", "reuse",
+    "selected_features_importance_order", "selected_features_chain_order",
+
+    # entrenamiento
+    "train_history_rows", "train_best_train_nll", "train_best_train_loop",
+    "train_final_train_nll", "train_best_val_nll", "train_best_val_loop",
+    "train_final_val_nll", "train_final_generalization_gap", "train_final_lr",
+
+    # recursos de circuito/hardware
+    "logical_qubits", "device_qubits_used", "statevector_max_abs_err",
+    "abstract_2q", "device_2q", "device_2q_std",
+    "device_depth", "device_depth_std",
+    "routing_inflation", "routing_inflation_std",
+
+    # metricas de calidad usadas en el paper
+    "ideal_fidelity", "ideal_fidelity_std",
+    "ideal_tvd_vs_mps", "ideal_tvd_vs_mps_std",
+    "hw_fidelity", "hw_fidelity_std",
+    "hw_tvd_vs_mps", "hw_tvd_vs_mps_std",
+    "hw_tvd_vs_ideal", "hw_tvd_vs_ideal_std",
+    "hw_marginal_L1_vs_mps", "hw_marginal_L1_vs_mps_std",
+    "hw_marginal_max_abs_vs_mps", "hw_marginal_max_abs_vs_mps_std",
+
+    # estado
+    "status", "stage", "compare_return_code", "hardware_return_code",
+    "gen_aer_return_code", "gen_fake_return_code", "error",
+]
+
+
+def load_existing_summary(path: Path) -> Dict[str, Any]:
+    """Lee el resumen estructurado actual ({schema_version, runs, rows})."""
     if not path.exists():
-        return []
+        return {"runs": [], "rows": []}
     try:
         raw = json.loads(path.read_text())
-        return raw if isinstance(raw, list) else []
+        if not isinstance(raw, dict) or raw.get("schema_version") != 2:
+            raise ValueError("formato de resumen no soportado; usa --summary-mode overwrite")
+        return {
+            "runs": raw.get("runs") if isinstance(raw.get("runs"), list) else [],
+            "rows": raw.get("rows") if isinstance(raw.get("rows"), list) else [],
+        }
     except Exception as exc:
-        print(f"[WARN] no pude leer resumen existente {path}: {exc!r}; empiezo sin acumularlo")
-        return []
+        print(f"[WARN] no pude leer {path}: {exc!r}; empiezo sin acumularlo")
+        return {"runs": [], "rows": []}
+
+
+def _is_structured_row(row: Dict[str, Any]) -> bool:
+    return isinstance(row, dict) and all(k in row for k in ("config", "metrics", "resources"))
+
+
+def _pick(row: Dict[str, Any], *keys: str, default=None):
+    for key in keys:
+        if key in row and row[key] is not None:
+            return row[key]
+    return default
+
+
+def _std(row: Dict[str, Any], *keys: str, default=None):
+    """Prefiere una std_total si existe."""
+    total_keys = []
+    for key in keys:
+        if key.endswith("_std"):
+            total_keys.append(key[:-4] + "_std_total")
+        total_keys.append(key)
+    return _pick(row, *total_keys, default=default)
+
+
+def _compact_list(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [jsonable(x) for x in value]
+    return value
+
+
+def _artifact_paths(row: Dict[str, Any]) -> Dict[str, Any]:
+    exp = row.get("experiment_dir")
+    if not exp:
+        return {}
+    exp_path = Path(str(exp))
+    variant = row.get("variant")
+    device = row.get("device")
+    out = {
+        "experiment_dir": str(exp_path),
+        "circuit_comparison_json": str(exp_path / "circuit_comparison" / "circuit_variant_comparison.json"),
+        "hardware_estimate_json": str(exp_path / "hardware_estimate" / "hardware_resource_estimate.json"),
+    }
+    if variant:
+        out["generation_aer_json"] = str(
+            exp_path / "hardware_generation" / f"generation_aer_{variant}.json"
+        )
+        if device:
+            out["generation_fake_json"] = str(
+                exp_path / "hardware_generation" / f"generation_fake_{device}_{variant}.json"
+            )
+    return out
+
+
+def make_structured_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Convierte una fila plana del sweep en una fila JSON compacta y legible."""
+    if _is_structured_row(row):
+        return jsonable(row)
+
+    variant = row.get("variant")
+    run_context = {
+        "device": row.get("device"),
+        "shots": row.get("shots"),
+        "seeds_arg": row.get("seeds_arg"),
+        "bootstrap": row.get("bootstrap"),
+        "timestamp_utc": row.get("sweep_timestamp_utc"),
+    }
+    config = {
+        "k": row.get("k"),
+        "D_max": row.get("D_max"),
+        "requested_b_max_log2_D": row.get("requested_b_max_log2_D"),
+        "b_max": row.get("b_max"),
+        "variant": variant,
+        "synthesis": row.get("synthesis"),
+        "reuse": row.get("reuse"),
+        "selected_sites_chain_order": _compact_list(row.get("selected_sites_chain_order")),
+        "selected_features_chain_order": _compact_list(row.get("selected_features_chain_order")),
+        "selected_sites_importance_order": _compact_list(row.get("selected_sites_importance_order")),
+        "selected_features_importance_order": _compact_list(row.get("selected_features_importance_order")),
+    }
+    training = {k: row.get(k) for k in [
+        "train_history_rows", "train_first_loop", "train_final_loop",
+        "train_first_train_nll", "train_final_train_nll",
+        "train_best_train_nll", "train_best_train_loop",
+        "train_final_val_nll", "train_best_val_nll", "train_best_val_loop",
+        "train_final_generalization_gap", "train_final_lr",
+        "train_final_bond_dims", "train_final_bond_min", "train_final_bond_max",
+        "train_final_bond_mean", "train_final_cap",
+        "train_max_gradient_norm", "train_max_discarded_weight",
+        "train_total_updates", "train_total_skipped_nan",
+        "train_wallclock_s", "train_elapsed_s_sum",
+    ] if k in row}
+    resources = {
+        "logical_qubits": row.get("logical_qubits"),
+        "device_qubits_used": _pick(row, "device_qubits_used", "routed_device_qubits_used"),
+        "statevector_max_abs_err": row.get("statevector_max_abs_err"),
+        "abstract_2q": row.get("abstract_2q"),
+        "device_2q": row.get("device_2q"),
+        "device_2q_std": row.get("device_2q_std"),
+        "device_depth": row.get("device_depth"),
+        "device_depth_std": row.get("device_depth_std"),
+        "routing_inflation": row.get("routing_inflation"),
+        "routing_inflation_std": row.get("routing_inflation_std"),
+        "abstract_depth": _pick(row, "abstract_depth", "routed_abstract_depth"),
+        "routed_overhead_2q": _pick(row, "routing_overhead_2q", "routed_routing_overhead_2q"),
+    }
+    metrics = {
+        "ideal": {
+            "fidelity_vs_mps": row.get("ideal_fidelity"),
+            "tvd_vs_mps": row.get("ideal_tvd_vs_mps"),
+            "marginal_L1_vs_mps": _pick(row, "ideal_marginal_L1_vs_mps", "aer_marginal_L1_hw_vs_mps"),
+        },
+        "hardware": {
+            "fidelity_vs_mps": row.get("hw_fidelity"),
+            "tvd_vs_mps": row.get("hw_tvd_vs_mps"),
+            "tvd_vs_ideal": row.get("hw_tvd_vs_ideal"),
+            "marginal_L1_vs_mps": row.get("hw_marginal_L1_vs_mps"),
+            "marginal_max_abs_vs_mps": _pick(row, "hw_marginal_max_abs_vs_mps", "fake_marginal_max_abs_hw_vs_mps"),
+            "topk_overlap": row.get("hw_topk_overlap"),
+        },
+    }
+    uncertainty = {
+        "method": row.get("error_bar_method"),
+        "n_error_samples": row.get("n_error_samples"),
+        "n_seeds": row.get("n_seeds"),
+        "ideal": {
+            "fidelity_std": _std(row, "ideal_fidelity_std", "aer_fidelity_hw_vs_mps_std"),
+            "fidelity_std_seed": _pick(row, "aer_fidelity_hw_vs_mps_std_seed"),
+            "fidelity_std_bootstrap": _pick(row, "aer_fidelity_hw_vs_mps_std_bootstrap"),
+            "tvd_vs_mps_std": _std(row, "ideal_tvd_vs_mps_std", "aer_tvd_hw_vs_mps_std"),
+            "tvd_vs_mps_std_seed": _pick(row, "aer_tvd_hw_vs_mps_std_seed"),
+            "tvd_vs_mps_std_bootstrap": _pick(row, "aer_tvd_hw_vs_mps_std_bootstrap"),
+            "marginal_L1_vs_mps_std": _std(row, "ideal_marginal_L1_vs_mps_std", "aer_marginal_L1_hw_vs_mps_std"),
+        },
+        "hardware": {
+            "fidelity_std": _std(row, "hw_fidelity_std", "fake_fidelity_hw_vs_mps_std"),
+            "fidelity_std_seed": _pick(row, "fake_fidelity_hw_vs_mps_std_seed"),
+            "fidelity_std_bootstrap": _pick(row, "fake_fidelity_hw_vs_mps_std_bootstrap"),
+            "tvd_vs_mps_std": _std(row, "hw_tvd_vs_mps_std", "fake_tvd_hw_vs_mps_std"),
+            "tvd_vs_mps_std_seed": _pick(row, "fake_tvd_hw_vs_mps_std_seed"),
+            "tvd_vs_mps_std_bootstrap": _pick(row, "fake_tvd_hw_vs_mps_std_bootstrap"),
+            "tvd_vs_ideal_std": _std(row, "hw_tvd_vs_ideal_std", "fake_tvd_hw_vs_ref_std"),
+            "tvd_vs_ideal_std_seed": _pick(row, "fake_tvd_hw_vs_ref_std_seed"),
+            "tvd_vs_ideal_std_bootstrap": _pick(row, "fake_tvd_hw_vs_ref_std_bootstrap"),
+            "marginal_L1_vs_mps_std": _std(row, "hw_marginal_L1_vs_mps_std", "fake_marginal_L1_hw_vs_mps_std"),
+            "marginal_L1_vs_mps_std_seed": _pick(row, "fake_marginal_L1_hw_vs_mps_std_seed"),
+            "marginal_L1_vs_mps_std_bootstrap": _pick(row, "fake_marginal_L1_hw_vs_mps_std_bootstrap"),
+            "marginal_max_abs_vs_mps_std": _std(row, "hw_marginal_max_abs_vs_mps_std", "fake_marginal_max_abs_hw_vs_mps_std"),
+            "marginal_max_abs_vs_mps_std_seed": _pick(row, "fake_marginal_max_abs_hw_vs_mps_std_seed"),
+            "marginal_max_abs_vs_mps_std_bootstrap": _pick(row, "fake_marginal_max_abs_hw_vs_mps_std_bootstrap"),
+        },
+    }
+    diagnostics = {
+        "circuit_num_observed_bitstrings": row.get("circuit_num_observed_bitstrings"),
+        "circuit_sample_tvd_vs_mps": row.get("circuit_sample_tvd_vs_mps"),
+        "aer_num_observed_bitstrings": row.get("aer_num_observed_bitstrings"),
+        "fake_num_observed_bitstrings": row.get("fake_num_observed_bitstrings"),
+        "aer_mc_noise_scale": row.get("aer_mc_noise_scale"),
+        "fake_mc_noise_scale": row.get("fake_mc_noise_scale"),
+        "gate_breakdown": row.get("circuit_gate_breakdown"),
+        "top_counts_available_in_child_json": bool(row.get("circuit_top_counts")),
+        "site_marginals_available_in_child_json": bool(row.get("fake_site_marginals_hw") or row.get("aer_site_marginals_hw")),
+    }
+    status = {
+        "stage": row.get("stage"),
+        "status": row.get("status"),
+        "error": row.get("error"),
+        "return_codes": {
+            "compare": row.get("compare_return_code"),
+            "hardware": row.get("hardware_return_code"),
+            "gen_aer": row.get("gen_aer_return_code"),
+            "gen_fake": row.get("gen_fake_return_code"),
+        },
+    }
+
+    row_id_parts = [
+        str(row.get("sweep_run_id") or "run"),
+        f"k{row.get('k')}", f"D{row.get('D_max')}", str(variant or row.get("stage") or "row"),
+    ]
+    structured = {
+        "sweep_run_id": row.get("sweep_run_id"),
+        "row_id": ":".join(row_id_parts),
+        "run": run_context,
+        "config": config,
+        "training": training,
+        "resources": resources,
+        "metrics": metrics,
+        "uncertainty": uncertainty,
+        "diagnostics": {k: v for k, v in diagnostics.items() if v is not None},
+        "status": status,
+        "artifacts": _artifact_paths(row),
+    }
+    return jsonable(structured)
+
+
+def make_csv_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Fila estrecha para sweep_summary.csv a partir de una fila plana o estructurada."""
+    s = make_structured_row(row)
+    run = s.get("run", {})
+    cfg = s.get("config", {})
+    tr = s.get("training", {})
+    res = s.get("resources", {})
+    met = s.get("metrics", {})
+    ideal = met.get("ideal", {})
+    hw = met.get("hardware", {})
+    unc = s.get("uncertainty", {})
+    uideal = unc.get("ideal", {})
+    uhw = unc.get("hardware", {})
+    status = s.get("status", {})
+    rc = status.get("return_codes", {})
+
+    out = {
+        "sweep_run_id": s.get("sweep_run_id"),
+        "sweep_timestamp_utc": run.get("timestamp_utc"),
+        "device": run.get("device"),
+        "shots": run.get("shots"),
+        "seeds_arg": run.get("seeds_arg"),
+        "bootstrap": run.get("bootstrap"),
+        "error_bar_method": unc.get("method"),
+        "n_error_samples": unc.get("n_error_samples"),
+        "n_seeds": unc.get("n_seeds"),
+
+        "k": cfg.get("k"),
+        "D_max": cfg.get("D_max"),
+        "requested_b_max_log2_D": cfg.get("requested_b_max_log2_D"),
+        "b_max": cfg.get("b_max"),
+        "variant": cfg.get("variant"),
+        "synthesis": cfg.get("synthesis"),
+        "reuse": cfg.get("reuse"),
+        "selected_features_importance_order": cfg.get("selected_features_importance_order"),
+        "selected_features_chain_order": cfg.get("selected_features_chain_order"),
+
+        "train_history_rows": tr.get("train_history_rows"),
+        "train_best_train_nll": tr.get("train_best_train_nll"),
+        "train_best_train_loop": tr.get("train_best_train_loop"),
+        "train_final_train_nll": tr.get("train_final_train_nll"),
+        "train_best_val_nll": tr.get("train_best_val_nll"),
+        "train_best_val_loop": tr.get("train_best_val_loop"),
+        "train_final_val_nll": tr.get("train_final_val_nll"),
+        "train_final_generalization_gap": tr.get("train_final_generalization_gap"),
+        "train_final_lr": tr.get("train_final_lr"),
+
+        "logical_qubits": res.get("logical_qubits"),
+        "device_qubits_used": res.get("device_qubits_used"),
+        "statevector_max_abs_err": res.get("statevector_max_abs_err"),
+        "abstract_2q": res.get("abstract_2q"),
+        "device_2q": res.get("device_2q"),
+        "device_2q_std": res.get("device_2q_std"),
+        "device_depth": res.get("device_depth"),
+        "device_depth_std": res.get("device_depth_std"),
+        "routing_inflation": res.get("routing_inflation"),
+        "routing_inflation_std": res.get("routing_inflation_std"),
+
+        "ideal_fidelity": ideal.get("fidelity_vs_mps"),
+        "ideal_fidelity_std": uideal.get("fidelity_std"),
+        "ideal_tvd_vs_mps": ideal.get("tvd_vs_mps"),
+        "ideal_tvd_vs_mps_std": uideal.get("tvd_vs_mps_std"),
+        "hw_fidelity": hw.get("fidelity_vs_mps"),
+        "hw_fidelity_std": uhw.get("fidelity_std"),
+        "hw_tvd_vs_mps": hw.get("tvd_vs_mps"),
+        "hw_tvd_vs_mps_std": uhw.get("tvd_vs_mps_std"),
+        "hw_tvd_vs_ideal": hw.get("tvd_vs_ideal"),
+        "hw_tvd_vs_ideal_std": uhw.get("tvd_vs_ideal_std"),
+        "hw_marginal_L1_vs_mps": hw.get("marginal_L1_vs_mps"),
+        "hw_marginal_L1_vs_mps_std": uhw.get("marginal_L1_vs_mps_std"),
+        "hw_marginal_max_abs_vs_mps": hw.get("marginal_max_abs_vs_mps"),
+        "hw_marginal_max_abs_vs_mps_std": uhw.get("marginal_max_abs_vs_mps_std"),
+
+        "status": status.get("status"),
+        "stage": status.get("stage"),
+        "compare_return_code": rc.get("compare"),
+        "hardware_return_code": rc.get("hardware"),
+        "gen_aer_return_code": rc.get("gen_aer"),
+        "gen_fake_return_code": rc.get("gen_fake"),
+        "error": status.get("error"),
+    }
+    return {k: jsonable(v) for k, v in out.items() if k in PAPER_CSV_COLUMNS}
 
 
 def flatten_rows_for_csv(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Mantiene solo columnas paper-ready y serializa listas pequeñas."""
     flat_rows: List[Dict[str, Any]] = []
     for row in rows:
         out = {}
-        for key, value in jsonable(row).items():
+        for key, value in make_csv_row(row).items():
             if isinstance(value, (dict, list)):
                 out[key] = json_dumps(value)
             else:
@@ -295,22 +609,71 @@ def flatten_rows_for_csv(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return flat_rows
 
 
-def write_summary_files(rows: List[Dict[str, Any]], json_path: Path, csv_path: Path) -> None:
-    """Escribe JSON completo y CSV plano con las mismas filas."""
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json_dumps(rows, indent=2))
+def extract_run_meta(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(row, dict):
+        return None
+    if isinstance(row.get("run_meta"), dict):
+        return {k: jsonable(v) for k, v in row["run_meta"].items() if v is not None}
+    out = {k: jsonable(row.get(k)) for k in RUN_META_KEYS if row.get(k) is not None}
+    return out or None
 
-    flat_rows = flatten_rows_for_csv(rows)
-    fieldnames: List[str] = []
+
+def collect_run_meta(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen = set()
-    for row in flat_rows:
-        for key in row.keys():
-            if key not in seen:
-                fieldnames.append(key)
-                seen.add(key)
+    runs: List[Dict[str, Any]] = []
+    for row in rows:
+        meta = extract_run_meta(row)
+        if not meta:
+            continue
+        key = meta.get("sweep_run_id") or json_dumps(meta, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        runs.append(meta)
+    return runs
 
+
+def compact_runs(*run_lists: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for runs in run_lists:
+        for run in runs or []:
+            if not isinstance(run, dict):
+                continue
+            cleaned = {k: jsonable(v) for k, v in run.items() if v is not None}
+            key = cleaned.get("sweep_run_id") or json_dumps(cleaned, sort_keys=True)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(cleaned)
+    return out
+
+
+def write_summary_files(rows: List[Dict[str, Any]], json_path: Path, csv_path: Path,
+                        *, runs: Optional[List[Dict[str, Any]]] = None) -> None:
+    """Escribe:
+      * JSON estructurado y compacto, con metadata de run una sola vez.
+      * CSV estrecho con solo columnas usadas para paper/análisis.
+    """
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+
+    structured_rows = [make_structured_row(row) for row in rows]
+    summary = {
+        "schema_version": 2,
+        "csv_schema": "paper_ready_v1",
+        "description": (
+            "Resumen compacto del sweep. El CSV contiene solo columnas paper-ready; "
+            "los detalles grandes (per-seed, top counts, marginales por sitio) "
+            "permanecen en los JSON hijos dentro de cada experiment_dir."
+        ),
+        "runs": compact_runs(runs or [], collect_run_meta(rows)),
+        "rows": structured_rows,
+    }
+    json_path.write_text(json_dumps(summary, indent=2))
+
+    flat_rows = flatten_rows_for_csv(structured_rows)
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=PAPER_CSV_COLUMNS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(flat_rows)
 
@@ -411,20 +774,20 @@ def main():
                     help="desactiva crecimiento adaptativo y truncacion: cada bond vale "
                          "exactamente D_max (eje de capacidad exacto y reproducible).")
     ap.add_argument("--feature-order", type=Path, default=None)
-    ap.add_argument("--device", default="torino", choices=["torino", "brisbane"])
+    ap.add_argument("--device", default="fez",
+                    choices=["fez", "marrakesh", "kingston", "torino", "brisbane"])
     ap.add_argument("--variants", default="no_reuse_isometry",
                     help="lista de variantes a evaluar en fidelidad, separadas por coma. "
                          "p.ej. no_reuse_isometry,reuse_unitary,reuse_isometry,no_reuse_unitary")
     ap.add_argument("--shots", type=int, default=8000)
-    ap.add_argument("--seeds", type=str, default=None,
-                    help="semillas de MUESTREO separadas por coma, p.ej. 0,1,2,3,4. "
-                         "OJO: en variantes reuse (circuito dinamico) Aer no genera "
-                         "ruido de disparo real, asi que su _std sale ~0 (artefacto). "
-                         "Para barras de error fiables usa --bootstrap.")
-    ap.add_argument("--bootstrap", type=int, default=0,
-                    help="B remuestreos bootstrap de los counts -> barra de error "
-                         "de ruido de disparo REAL y uniforme para todas las "
-                         "variantes (recomendado, p.ej. 300). Prioritario sobre --seeds.")
+    ap.add_argument("--seeds", type=str, default="1,2,3,4,5",
+                    help="semillas de muestreo/transpilacion separadas por coma, "
+                         "p.ej. 1,2,3,4,5.")
+    ap.add_argument("--bootstrap", type=int, default=300,
+                    help="B remuestreos bootstrap por seed para estimar ruido de shots "
+                         "y combinarlo con la variacion entre seeds: "
+                         "std_total = sqrt(std_seed^2 + std_bootstrap^2). "
+                         "Usa 0 para desactivarlo.")
     ap.add_argument("--scripts-dir", type=Path, default=Path(__file__).resolve().parent)
     ap.add_argument("--out-dir", type=Path, default=None)
     ap.add_argument("--sweep-name", default=None,
@@ -449,7 +812,9 @@ def main():
 
     summary_json = sweep_root / "sweep_summary.json"
     summary_csv = sweep_root / "sweep_summary.csv"
-    existing_rows = [] if args.summary_mode == "overwrite" else load_existing_summary(summary_json)
+    existing_summary = {"runs": [], "rows": []} if args.summary_mode == "overwrite" else load_existing_summary(summary_json)
+    existing_rows = existing_summary.get("rows", [])
+    existing_runs = existing_summary.get("runs", [])
 
     schema, train_X, val_X = load_full_artifacts(args.data_dir)
     N_full = int(train_X.shape[1])
@@ -468,6 +833,8 @@ def main():
         "summary_mode": args.summary_mode,
         "device": args.device,
         "shots": int(args.shots),
+        "seeds_arg": args.seeds,
+        "bootstrap": int(args.bootstrap),
         "num_loops_override": args.num_loops,
         "fixed_bond": bool(args.fixed_bond),
         "k_list_arg": k_list,
@@ -484,9 +851,11 @@ def main():
 
     def persist_progress() -> None:
         combined = existing_rows + rows
-        write_summary_files(combined, summary_json, summary_csv)
+        write_summary_files(combined, summary_json, summary_csv,
+                            runs=compact_runs(existing_runs, [run_meta]))
         write_summary_files(rows, run_root / "sweep_summary_this_run.json",
-                            run_root / "sweep_summary_this_run.csv")
+                            run_root / "sweep_summary_this_run.csv",
+                            runs=[run_meta])
     for k in k_list:
         if k > N_full:
             print(f"\n[skip] k={k} > N_full={N_full}")
@@ -533,7 +902,8 @@ def main():
 
             print("  [3] hardware_resource_estimate...")
             hardware_rc = run_script("hardware_resource_estimate.py",
-                       [str(kdir), "--device", args.device, "--opt-level", "3"], sd)
+                       [str(kdir), "--device", args.device, "--opt-level", "3",
+                        "--transpile-seeds", args.seeds], sd)
             hw = read_json(kdir / "hardware_estimate" / "hardware_resource_estimate.json")
 
             for variant in variants:
@@ -567,20 +937,32 @@ def main():
                     "gen_aer_return_code": gen_aer_rc,
                     "gen_fake_return_code": gen_fake_rc,
 
-                    # Alias historicos / columnas principales para leer rapido.
+                    # Columnas canónicas para leer rápido.
                     "b_max": cvar.get("b_max", hvar.get("b_max")),
                     "logical_qubits": cvar.get("num_qubits", hvar.get("logical_qubits")),
                     "statevector_max_abs_err": cvar.get("statevector_max_abs_err"),
                     "abstract_2q": cvar.get("two_qubit_gates", hvar.get("abstract_2q")),
                     "device_2q": hvar.get("device_2q"),
+                    "device_2q_std": hvar.get("device_2q_std"),
+                    "device_qubits_used": hvar.get("device_qubits_used"),
                     "routing_inflation": hvar.get("routing_inflation_2q"),
+                    "routing_inflation_std": hvar.get("routing_inflation_2q_std"),
                     "device_depth": hvar.get("device_depth"),
+                    "device_depth_std": hvar.get("device_depth_std"),
                     "ideal_fidelity": (gen_aer or {}).get("fidelity_hw_vs_mps"),
+                    "ideal_fidelity_std": (gen_aer or {}).get("fidelity_hw_vs_mps_std"),
                     "ideal_tvd_vs_mps": (gen_aer or {}).get("tvd_hw_vs_mps"),  # suelo MC
+                    "ideal_tvd_vs_mps_std": (gen_aer or {}).get("tvd_hw_vs_mps_std"),
                     "hw_fidelity": (gen_fake or {}).get("fidelity_hw_vs_mps"),
+                    "hw_fidelity_std": (gen_fake or {}).get("fidelity_hw_vs_mps_std"),
                     "hw_marginal_L1_vs_mps": (gen_fake or {}).get("marginal_L1_hw_vs_mps"),
+                    "hw_marginal_L1_vs_mps_std": (gen_fake or {}).get("marginal_L1_hw_vs_mps_std"),
+                    "hw_marginal_max_abs_vs_mps": (gen_fake or {}).get("marginal_max_abs_hw_vs_mps"),
+                    "hw_marginal_max_abs_vs_mps_std": (gen_fake or {}).get("marginal_max_abs_hw_vs_mps_std"),
                     "hw_tvd_vs_mps": (gen_fake or {}).get("tvd_hw_vs_mps"),
+                    "hw_tvd_vs_mps_std": (gen_fake or {}).get("tvd_hw_vs_mps_std"),
                     "hw_tvd_vs_ideal": (gen_fake or {}).get("tvd_hw_vs_ref"),
+                    "hw_tvd_vs_ideal_std": (gen_fake or {}).get("tvd_hw_vs_ref_std"),
                     "hw_topk_overlap": (gen_fake or {}).get("topk_overlap"),
 
                     # Barras de error (semillas o bootstrap). El metodo recomendado
@@ -589,19 +971,15 @@ def main():
                     "n_error_samples": ((gen_fake or {}).get("n_boots")
                                         or (gen_fake or {}).get("n_seeds", 1)),
                     "n_seeds": (gen_fake or {}).get("n_seeds", 1),
-                    "hw_fidelity_std": (gen_fake or {}).get("fidelity_hw_vs_mps_std"),
-                    "hw_tvd_vs_mps_std": (gen_fake or {}).get("tvd_hw_vs_mps_std"),
-                    "hw_marginal_L1_vs_mps_std": (gen_fake or {}).get("marginal_L1_hw_vs_mps_std"),
-                    "ideal_fidelity_std": (gen_aer or {}).get("fidelity_hw_vs_mps_std"),
                 }
 
                 # Métricas completas autocontenidas: no hace falta abrir subcarpetas.
                 # Saltamos per_seed para no meter una lista anidada enorme en cada fila
                 # (queda igualmente en el JSON de hardware_generation/).
                 add_prefixed_fields(row, "circuit", cvar)
-                add_prefixed_fields(row, "routed", hvar)
-                add_prefixed_fields(row, "aer", gen_aer, skip={"per_seed"})
-                add_prefixed_fields(row, "fake", gen_fake, skip={"per_seed"})
+                add_prefixed_fields(row, "routed", hvar, skip={"per_transpile_seed"})
+                add_prefixed_fields(row, "aer", gen_aer, skip={"per_seed", "per_seed_bootstrap"})
+                add_prefixed_fields(row, "fake", gen_fake, skip={"per_seed", "per_seed_bootstrap"})
 
                 rows.append(row)
                 persist_progress()
@@ -615,8 +993,8 @@ def main():
     persist_progress()
     try:
         import pandas as pd
-        df = pd.DataFrame(rows)
-        all_df = pd.DataFrame(existing_rows + rows)
+        df = pd.DataFrame(flatten_rows_for_csv(rows))
+        all_df = pd.DataFrame(flatten_rows_for_csv(existing_rows + rows))
         cols = ["sweep_run_id", "k", "D_max", "b_max", "variant", "logical_qubits",
                 "device_2q", "device_depth", "routing_inflation",
                 "hw_fidelity", "hw_fidelity_std", "hw_marginal_L1_vs_mps", "hw_tvd_vs_mps",
